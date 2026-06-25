@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/articles.schema.json",
+  "title": "Raw Articles",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "articles"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "source_run_id": { "type": "string" },
+    "articles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["source", "title", "url", "collected_at"],
+        "properties": {
+          "source": { "type": "string" },
+          "source_type": {
+            "type": "string",
+            "enum": ["rss", "atom", "github_release", "api", "html"]
+          },
+          "title": { "type": "string", "minLength": 1 },
+          "url": { "type": "string", "format": "uri" },
+          "summary": { "type": "string" },
+          "author": { "type": "string" },
+          "published_at": { "type": ["string", "null"], "format": "date-time" },
+          "collected_at": { "type": "string", "format": "date-time" },
+          "raw": { "type": "object" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

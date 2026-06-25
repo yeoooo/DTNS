@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/trends.schema.json",
+  "title": "Newsletter Trends",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "topic", "trends"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "topic": {
+      "type": "string",
+      "enum": ["technology", "backend", "qa"]
+    },
+    "period": {
+      "type": "object",
+      "required": ["start", "end"],
+      "properties": {
+        "start": { "type": "string", "format": "date" },
+        "end": { "type": "string", "format": "date" }
+      },
+      "additionalProperties": false
+    },
+    "trends": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "importance",
+          "summary",
+          "why_it_matters",
+          "article_ids"
+        ],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "importance": {
+            "type": "string",
+            "enum": ["high", "medium", "low"]
+          },
+          "summary": { "type": "string" },
+          "why_it_matters": { "type": "string" },
+          "article_ids": {
+            "type": "array",
+            "items": { "type": "string" },
+            "minItems": 1
+          },
+          "keywords": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

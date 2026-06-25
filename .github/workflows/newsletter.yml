@@ -1,0 +1,24 @@
+name: Weekly Newsletter
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 0 * * 1"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync
+      - run: uv run newsletter run-all
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.0-flash' }}
+          DISCORD_WEBHOOK_TECHNOLOGY: ${{ secrets.DISCORD_WEBHOOK_TECHNOLOGY }}
+          DISCORD_WEBHOOK_BACKEND: ${{ secrets.DISCORD_WEBHOOK_BACKEND }}
+          DISCORD_WEBHOOK_QA: ${{ secrets.DISCORD_WEBHOOK_QA }}
