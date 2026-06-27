@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +21,7 @@ from dtns.collectors.sources import (
 )
 
 DEFAULT_ARTICLES_FILENAME = "articles.json"
+logger = logging.getLogger(__name__)
 
 
 def collect_articles(
@@ -40,6 +42,7 @@ def collect_articles(
     source_run_id = source_run_id or str(uuid.uuid4())
 
     articles: list[RawArticle] = []
+    successful_sources = 0
     headers = {"User-Agent": "dtns-collector/0.1 (+https://github.com/dtns)"}
     with httpx.Client(
         follow_redirects=True,
@@ -47,24 +50,46 @@ def collect_articles(
         headers=headers,
     ) as client:
         for source in feed_sources:
-            articles.extend(
-                fetch_feed_articles(
-                    client,
-                    source,
-                    generated_at,
-                    limit=limit_per_source,
+            try:
+                articles.extend(
+                    fetch_feed_articles(
+                        client,
+                        source,
+                        generated_at,
+                        limit=limit_per_source,
+                    )
                 )
-            )
+                successful_sources += 1
+            except Exception as exc:
+                logger.warning(
+                    "Skipping unavailable feed %s (%s): %s",
+                    source.name,
+                    source.url,
+                    exc,
+                )
 
         for source in github_release_sources:
-            articles.extend(
-                fetch_github_release_articles(
-                    client,
-                    source,
-                    generated_at,
-                    limit=limit_per_source,
+            try:
+                articles.extend(
+                    fetch_github_release_articles(
+                        client,
+                        source,
+                        generated_at,
+                        limit=limit_per_source,
+                    )
                 )
-            )
+                successful_sources += 1
+            except Exception as exc:
+                logger.warning(
+                    "Skipping unavailable GitHub release feed %s (%s): %s",
+                    source.name,
+                    source.url,
+                    exc,
+                )
+
+    source_count = len(feed_sources) + len(github_release_sources)
+    if source_count and successful_sources == 0:
+        raise RuntimeError(f"All {source_count} configured article sources failed")
 
     return RawArticlesDocument(
         generated_at=generated_at,
