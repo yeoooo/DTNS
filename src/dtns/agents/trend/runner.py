@@ -27,7 +27,7 @@ from pydantic import (
 TOPIC_ARTICLES_FILENAME = "topic_articles.json"
 TOPIC_TRENDS_FILENAME = "topic_trends.json"
 SCHEMA_VERSION = "1.0"
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 MODEL_ENV_VAR = "DTNS_TREND_MODEL"
 GEMINI_MODEL_ENV_VAR = "GEMINI_MODEL"
 IMPORTANCE_VALUES = ("high", "medium", "low")

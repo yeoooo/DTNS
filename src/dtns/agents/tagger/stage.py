@@ -28,7 +28,7 @@ from dtns.contracts.tagged_articles import (
 
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
 TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
-DEFAULT_MODEL = "gemini-2.0-flash"
+DEFAULT_MODEL = "gemini-3.5-flash"
 MODEL_ENV_VAR = "DTNS_TAGGER_MODEL"
 GEMINI_MODEL_ENV_VAR = "GEMINI_MODEL"
 PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "tagger.md"

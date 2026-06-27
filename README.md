@@ -252,7 +252,7 @@ AI Provider
 기본 모델
 
 ```
-gemini-2.0-flash
+gemini-3.5-flash
 ```
 
 필수 환경 변수
