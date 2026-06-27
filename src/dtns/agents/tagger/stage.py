@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -33,6 +34,9 @@ MODEL_ENV_VAR = "DTNS_TAGGER_MODEL"
 GEMINI_MODEL_ENV_VAR = "GEMINI_MODEL"
 PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "tagger.md"
 MAX_ITEMS_PER_FIELD = 12
+TAGGER_BATCH_SIZE = 20
+MAX_BATCH_ATTEMPTS = 3
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class LLMClient(Protocol):
@@ -59,35 +63,42 @@ class GeminiTaggerClient:
             ) from error
 
         client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        response = client.models.generate_content(
-            model=self.model,
-            contents=[
-                self.prompt_path.read_text(encoding="utf-8"),
-                json.dumps(
-                    {
-                        "schema_version": SCHEMA_VERSION,
-                        "instructions": [
-                            "Return JSON only.",
-                            "Do not classify articles into newsletter topics.",
-                            (
-                                "Identify frameworks and programming languages "
-                                "as technologies."
-                            ),
-                            (
-                                "Use domains as broad engineering domains, "
-                                "not topic labels."
-                            ),
-                        ],
-                        "articles": [
-                            article.model_dump(mode="json", exclude_none=True)
-                            for article in articles
-                        ],
-                    },
-                    ensure_ascii=False,
-                ),
-            ],
-            config={"temperature": 0.1, "response_mime_type": "application/json"},
-        )
+        try:
+            response = client.models.generate_content(
+                model=self.model,
+                contents=[
+                    self.prompt_path.read_text(encoding="utf-8"),
+                    json.dumps(
+                        {
+                            "schema_version": SCHEMA_VERSION,
+                            "instructions": [
+                                "Return JSON only.",
+                                "Do not classify articles into newsletter topics.",
+                                (
+                                    "Identify frameworks and programming languages "
+                                    "as technologies."
+                                ),
+                                (
+                                    "Use domains as broad engineering domains, "
+                                    "not topic labels."
+                                ),
+                            ],
+                            "articles": [
+                                article.model_dump(mode="json", exclude_none=True)
+                                for article in articles
+                            ],
+                        },
+                        ensure_ascii=False,
+                    ),
+                ],
+                config={
+                    "temperature": 0.1,
+                    "response_mime_type": "application/json",
+                    "max_output_tokens": 8192,
+                },
+            )
+        finally:
+            client.close()
         content = getattr(response, "text", None)
         if not content:
             raise ValueError("LLM returned an empty tagger response.")
@@ -108,12 +119,17 @@ def tag_articles(
     document = NormalizedArticlesDocument.model_validate(_read_json(input_path))
     llm_client = llm_client or GeminiTaggerClient(model=resolve_model(model))
 
-    llm_payload = llm_client.tag(document.articles)
-    tagged_articles = merge_tagger_output(
-        document.articles,
-        llm_payload,
-        model=llm_client.model,
-    )
+    tagged_articles: list[TaggedArticle] = []
+    batches = list(_batched(document.articles, TAGGER_BATCH_SIZE))
+    for batch_number, batch in enumerate(batches, start=1):
+        tagged_articles.extend(
+            _tag_batch(
+                batch,
+                llm_client=llm_client,
+                batch_number=batch_number,
+                batch_count=len(batches),
+            )
+        )
     output = TaggedArticlesDocument(
         generated_at=datetime.now(UTC),
         articles=tagged_articles,
@@ -130,6 +146,50 @@ def tag_articles(
         encoding="utf-8",
     )
     return output
+
+
+def _tag_batch(
+    articles: Sequence[NormalizedArticle],
+    *,
+    llm_client: LLMClient,
+    batch_number: int,
+    batch_count: int,
+) -> list[TaggedArticle]:
+    for attempt in range(1, MAX_BATCH_ATTEMPTS + 1):
+        try:
+            llm_payload = llm_client.tag(articles)
+            return merge_tagger_output(
+                articles,
+                llm_payload,
+                model=llm_client.model,
+            )
+        except ValueError as error:
+            if attempt == MAX_BATCH_ATTEMPTS:
+                raise ValueError(
+                    f"Tagger batch {batch_number}/{batch_count} failed after "
+                    f"{MAX_BATCH_ATTEMPTS} attempts."
+                ) from error
+        except Exception as error:
+            if not _is_retryable_api_error(error):
+                raise
+            if attempt == MAX_BATCH_ATTEMPTS:
+                raise RuntimeError(
+                    f"Tagger batch {batch_number}/{batch_count} failed after "
+                    f"{MAX_BATCH_ATTEMPTS} attempts due to transient API errors."
+                ) from error
+            time.sleep(2**attempt)
+    raise AssertionError("unreachable")
+
+
+def _is_retryable_api_error(error: Exception) -> bool:
+    return getattr(error, "status_code", None) in RETRYABLE_STATUS_CODES
+
+
+def _batched(
+    articles: Sequence[NormalizedArticle], size: int
+) -> Iterable[Sequence[NormalizedArticle]]:
+    for start in range(0, len(articles), size):
+        yield articles[start : start + size]
 
 
 def merge_tagger_output(
@@ -223,7 +283,7 @@ def _coerce_ai_metadata(value: Any, *, model: str) -> AIMetadata:
         raise ValueError("LLM response must include ai_metadata for each article.")
 
     metadata = dict(value)
-    metadata["model"] = normalize_text(str(metadata.get("model") or model)) or model
+    metadata["model"] = model
     return AIMetadata.model_validate(metadata)
 
 

@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 TOPICS = ("technology", "backend", "qa")
+RUN_ALL_LIMIT_PER_SOURCE = 10
 ARTICLES_FILENAME = "articles.json"
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
 TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
@@ -38,8 +39,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum articles to collect from each source.",
     )
 
-    for command in ("preprocess", "tag", "classify", "run-all"):
+    for command in ("preprocess", "tag", "classify"):
         subparsers.add_parser(command)
+
+    run_all_parser = subparsers.add_parser("run-all")
+    run_all_parser.add_argument(
+        "--limit-per-source",
+        type=int,
+        default=RUN_ALL_LIMIT_PER_SOURCE,
+        help="Maximum articles to collect from each source.",
+    )
 
     for command in ("trend", "edit", "publish"):
         topic_parser = subparsers.add_parser(command)
@@ -83,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run-all":
-        _run_collect(data_dir)
+        _run_collect(data_dir, limit_per_source=args.limit_per_source)
         _run_preprocess(data_dir)
         _run_tag(data_dir)
         _run_classify(data_dir)

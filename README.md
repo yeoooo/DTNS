@@ -77,6 +77,15 @@ Discord Webhook 발행
 뉴스 및 기술 블로그에서 기사 메타데이터를 수집합니다.
 
 - AI 사용하지 않음
+- InfoQ RSS
+- Netflix TechBlog
+- Meta Engineering
+- GitHub Engineering Blog
+- GitHub Releases: CPython, Node.js, Kubernetes, PyTorch, TensorFlow
+
+`run-all`은 주간 실행의 처리량과 AI 비용을 제한하기 위해 출처별 최신 10건을
+수집합니다. `collect --limit-per-source N`으로 출처별 수집량을 직접 지정할 수
+있습니다.
 
 ---
 
@@ -209,7 +218,7 @@ src/dtns/
 # CLI 명세
 
 ```bash
-newsletter collect
+newsletter collect --limit-per-source 10
 newsletter preprocess
 newsletter tag
 newsletter classify
@@ -226,7 +235,7 @@ newsletter publish --topic technology
 newsletter publish --topic backend
 newsletter publish --topic qa
 
-newsletter run-all
+newsletter run-all --limit-per-source 10
 ```
 
 현재 CLI는 프로젝트의 아키텍처 계약(Architectural Contract)입니다.

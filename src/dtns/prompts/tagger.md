@@ -16,15 +16,18 @@ source names, summaries, and publication dates.
 
 Return JSON only. Do not return Markdown.
 
-For each article, preserve the original article fields and add:
+For each article, return only:
 
+- `id`: the exact input article ID.
 - `tags`: specific technical tags.
 - `technologies`: concrete technologies, projects, languages, tools, or
   frameworks.
 - `domains`: broader engineering domains.
-- `ai_metadata.model`: model name.
 - `ai_metadata.confidence`: number from 0 to 1.
 - `ai_metadata.rationale`: short explanation.
+
+Do not repeat titles, URLs, summaries, source metadata, or article bodies.
+The runtime records the model name; do not generate `ai_metadata.model`.
 
 ## Tagging Guidance
 

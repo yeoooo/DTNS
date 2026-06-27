@@ -21,15 +21,13 @@ DEFAULT_INFOQ_FEEDS = (
     "https://feed.infoq.com/",
 )
 
-DEFAULT_OSS_INSIGHT_FEEDS = (
-    "https://ossinsight.io/blog/rss.xml",
-)
+# OSS Insight no longer exposes the RSS endpoint used by the collector.
+DEFAULT_OSS_INSIGHT_FEEDS: tuple[str, ...] = ()
 
 DEFAULT_ENGINEERING_BLOG_FEEDS = (
     "https://netflixtechblog.com/feed",
     "https://engineering.fb.com/feed/",
     "https://github.blog/engineering.atom",
-    "https://www.uber.com/blog/engineering/rss/",
 )
 
 DEFAULT_GITHUB_RELEASE_REPOSITORIES = (

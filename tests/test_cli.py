@@ -11,7 +11,9 @@ def test_run_all_executes_complete_pipeline_in_order(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cli,
         "_run_collect",
-        lambda data_dir, **_: calls.append(("collect", data_dir, None)),
+        lambda data_dir, **kwargs: calls.append(
+            ("collect", data_dir, str(kwargs["limit_per_source"]))
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -48,7 +50,7 @@ def test_run_all_executes_complete_pipeline_in_order(monkeypatch, tmp_path):
 
     assert exit_code == 0
     assert calls == [
-        ("collect", tmp_path, None),
+        ("collect", tmp_path, "10"),
         ("preprocess", tmp_path, None),
         ("tag", tmp_path, None),
         ("classify", tmp_path, None),
