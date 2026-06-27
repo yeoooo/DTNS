@@ -10,13 +10,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from dtns.agents.gemini import generate_content_with_fallback
 from dtns.contracts.tagged_articles import (
     AIMetadata,
     NormalizedArticle,
@@ -36,13 +36,20 @@ PROMPT_PATH = Path(__file__).resolve().parents[2] / "prompts" / "tagger.md"
 MAX_ITEMS_PER_FIELD = 12
 TAGGER_BATCH_SIZE = 20
 MAX_BATCH_ATTEMPTS = 3
-RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+@dataclass(frozen=True)
+class TaggerResponse:
+    payload: Mapping[str, Any]
+    model: str
 
 
 class LLMClient(Protocol):
     model: str
 
-    def tag(self, articles: Sequence[NormalizedArticle]) -> Mapping[str, Any]:
+    def tag(
+        self, articles: Sequence[NormalizedArticle]
+    ) -> Mapping[str, Any] | TaggerResponse:
         """Return JSON-compatible tag data for the supplied articles."""
 
 
@@ -53,56 +60,49 @@ class GeminiTaggerClient:
     model: str
     prompt_path: Path = PROMPT_PATH
 
-    def tag(self, articles: Sequence[NormalizedArticle]) -> Mapping[str, Any]:
+    def tag(self, articles: Sequence[NormalizedArticle]) -> TaggerResponse:
         _load_dotenv()
-        try:
-            from google import genai
-        except ImportError as error:  # pragma: no cover - dependency is project-level.
-            raise RuntimeError(
-                "The 'google-genai' package is required for tagger LLM calls."
-            ) from error
-
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-        try:
-            response = client.models.generate_content(
-                model=self.model,
-                contents=[
-                    self.prompt_path.read_text(encoding="utf-8"),
-                    json.dumps(
-                        {
-                            "schema_version": SCHEMA_VERSION,
-                            "instructions": [
-                                "Return JSON only.",
-                                "Do not classify articles into newsletter topics.",
-                                (
-                                    "Identify frameworks and programming languages "
-                                    "as technologies."
-                                ),
-                                (
-                                    "Use domains as broad engineering domains, "
-                                    "not topic labels."
-                                ),
-                            ],
-                            "articles": [
-                                article.model_dump(mode="json", exclude_none=True)
-                                for article in articles
-                            ],
-                        },
-                        ensure_ascii=False,
-                    ),
-                ],
-                config={
-                    "temperature": 0.1,
-                    "response_mime_type": "application/json",
-                    "max_output_tokens": 8192,
-                },
-            )
-        finally:
-            client.close()
+        generation = generate_content_with_fallback(
+            primary_model=self.model,
+            contents=[
+                self.prompt_path.read_text(encoding="utf-8"),
+                json.dumps(
+                    {
+                        "schema_version": SCHEMA_VERSION,
+                        "instructions": [
+                            "Return JSON only.",
+                            "Do not classify articles into newsletter topics.",
+                            (
+                                "Identify frameworks and programming languages "
+                                "as technologies."
+                            ),
+                            (
+                                "Use domains as broad engineering domains, "
+                                "not topic labels."
+                            ),
+                        ],
+                        "articles": [
+                            article.model_dump(mode="json", exclude_none=True)
+                            for article in articles
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ],
+            config={
+                "temperature": 0.1,
+                "response_mime_type": "application/json",
+                "max_output_tokens": 8192,
+            },
+        )
+        response = generation.response
         content = getattr(response, "text", None)
         if not content:
             raise ValueError("LLM returned an empty tagger response.")
-        return _parse_json_object(content)
+        return TaggerResponse(
+            payload=_parse_json_object(content),
+            model=generation.model,
+        )
 
 
 def tag_articles(
@@ -157,11 +157,17 @@ def _tag_batch(
 ) -> list[TaggedArticle]:
     for attempt in range(1, MAX_BATCH_ATTEMPTS + 1):
         try:
-            llm_payload = llm_client.tag(articles)
+            tagger_response = llm_client.tag(articles)
+            if isinstance(tagger_response, TaggerResponse):
+                llm_payload = tagger_response.payload
+                response_model = tagger_response.model
+            else:
+                llm_payload = tagger_response
+                response_model = llm_client.model
             return merge_tagger_output(
                 articles,
                 llm_payload,
-                model=llm_client.model,
+                model=response_model,
             )
         except ValueError as error:
             if attempt == MAX_BATCH_ATTEMPTS:
@@ -169,20 +175,7 @@ def _tag_batch(
                     f"Tagger batch {batch_number}/{batch_count} failed after "
                     f"{MAX_BATCH_ATTEMPTS} attempts."
                 ) from error
-        except Exception as error:
-            if not _is_retryable_api_error(error):
-                raise
-            if attempt == MAX_BATCH_ATTEMPTS:
-                raise RuntimeError(
-                    f"Tagger batch {batch_number}/{batch_count} failed after "
-                    f"{MAX_BATCH_ATTEMPTS} attempts due to transient API errors."
-                ) from error
-            time.sleep(2**attempt)
     raise AssertionError("unreachable")
-
-
-def _is_retryable_api_error(error: Exception) -> bool:
-    return getattr(error, "status_code", None) in RETRYABLE_STATUS_CODES
 
 
 def _batched(

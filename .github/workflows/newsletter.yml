@@ -23,6 +23,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-3.5-flash' }}
+          GEMINI_FALLBACK_MODEL: ${{ vars.GEMINI_FALLBACK_MODEL || 'gemini-3.1-flash-lite' }}
           DISCORD_WEBHOOK_TECHNOLOGY: ${{ secrets.DISCORD_WEBHOOK_TECHNOLOGY }}
           DISCORD_WEBHOOK_BACKEND: ${{ secrets.DISCORD_WEBHOOK_BACKEND }}
           DISCORD_WEBHOOK_QA: ${{ secrets.DISCORD_WEBHOOK_QA }}

@@ -264,6 +264,9 @@ AI Provider
 gemini-3.5-flash
 ```
 
+일시적인 429 또는 5xx 오류가 계속되면 `gemini-3.1-flash-lite`로
+자동 전환합니다. `GEMINI_FALLBACK_MODEL` 환경 변수로 변경할 수 있습니다.
+
 필수 환경 변수
 
 ```text

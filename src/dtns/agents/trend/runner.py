@@ -23,6 +23,8 @@ from pydantic import (
     model_validator,
 )
 
+from dtns.agents.gemini import generate_content_with_fallback
+
 
 TOPIC_ARTICLES_FILENAME = "topic_articles.json"
 TOPIC_TRENDS_FILENAME = "topic_trends.json"
@@ -241,13 +243,8 @@ def _request_trends(
     model: str,
     client: Any | None,
 ) -> TrendsFile:
-    if client is None:
-        from google import genai
-
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-    response = client.models.generate_content(
-        model=model,
+    generation = generate_content_with_fallback(
+        primary_model=model,
         contents=[
             _build_system_prompt(topic_articles.topic),
             json.dumps(
@@ -260,7 +257,9 @@ def _request_trends(
             "temperature": 0.2,
             "response_mime_type": "application/json",
         },
+        client=client,
     )
+    response = generation.response
 
     try:
         payload = json.loads(response.text)

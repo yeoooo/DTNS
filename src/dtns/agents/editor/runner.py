@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from dtns.agents.gemini import generate_content_with_fallback
+
 
 TOPIC_TRENDS_FILENAME = "topic_trends.json"
 TOPIC_ARTICLES_FILENAME = "topic_articles.json"
@@ -251,17 +253,8 @@ def _request_newsletter(
     model: str,
     client: Any | None,
 ) -> str:
-    if client is None:
-        try:
-            from google import genai
-        except ImportError as error:  # pragma: no cover - dependency is project-level.
-            raise RuntimeError(
-                "The 'google-genai' package is required for editor LLM calls."
-            ) from error
-        client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-    response = client.models.generate_content(
-        model=model,
+    generation = generate_content_with_fallback(
+        primary_model=model,
         contents=[
             _build_system_prompt(trends_file.topic),
             json.dumps(
@@ -271,7 +264,9 @@ def _request_newsletter(
             ),
         ],
         config={"temperature": 0.4},
+        client=client,
     )
+    response = generation.response
 
     content = getattr(response, "text", None)
     if not content:

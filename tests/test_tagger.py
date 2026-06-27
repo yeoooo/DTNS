@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
-from dtns.agents.tagger import stage
 from dtns.agents.tagger.stage import TAGGER_BATCH_SIZE, tag_articles
 
 
@@ -36,10 +35,6 @@ class FakeTaggerClient:
         }
 
 
-class TransientTaggerError(RuntimeError):
-    status_code = 503
-
-
 def test_tag_articles_batches_large_inputs_and_preserves_order(tmp_path):
     article_count = TAGGER_BATCH_SIZE + 3
     input_path = tmp_path / "normalized_articles.json"
@@ -65,30 +60,6 @@ def test_tag_articles_retries_invalid_batch_response_once(tmp_path):
     result = tag_articles(input_path, output_path, llm_client=client)
 
     assert client.batch_sizes == [1, 1]
-    assert len(result.articles) == 1
-
-
-def test_tag_articles_retries_transient_api_error(monkeypatch, tmp_path):
-    input_path = tmp_path / "normalized_articles.json"
-    output_path = tmp_path / "tagged_articles.json"
-    _write_normalized_articles(input_path, 1)
-    client = FakeTaggerClient()
-    original_tag = client.tag
-    attempts = 0
-
-    def transient_then_success(articles):
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise TransientTaggerError("high demand")
-        return original_tag(articles)
-
-    monkeypatch.setattr(client, "tag", transient_then_success)
-    monkeypatch.setattr(stage.time, "sleep", lambda _: None)
-
-    result = tag_articles(input_path, output_path, llm_client=client)
-
-    assert attempts == 2
     assert len(result.articles) == 1
 
 
