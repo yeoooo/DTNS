@@ -17,25 +17,9 @@ import httpx
 from dtns.collectors.models import RawArticle, SourceType
 
 
-DEFAULT_INFOQ_FEEDS = (
-    "https://feed.infoq.com/",
-)
-
-# OSS Insight no longer exposes the RSS endpoint used by the collector.
-DEFAULT_OSS_INSIGHT_FEEDS: tuple[str, ...] = ()
-
-DEFAULT_ENGINEERING_BLOG_FEEDS = (
-    "https://netflixtechblog.com/feed",
-    "https://engineering.fb.com/feed/",
-    "https://github.blog/engineering.atom",
-)
-
 DEFAULT_GITHUB_RELEASE_REPOSITORIES = (
-    "python/cpython",
-    "nodejs/node",
-    "kubernetes/kubernetes",
-    "pytorch/pytorch",
-    "tensorflow/tensorflow",
+    "moby/moby",
+    "redis/redis",
 )
 
 
@@ -59,19 +43,35 @@ class GitHubReleaseSource:
         return f"https://github.com/{self.repository}/releases.atom"
 
 
+DEFAULT_FEED_SOURCES = (
+    FeedSource("InfoQ", "https://www.infoq.com/feed", SourceType.RSS),
+    FeedSource("The New Stack", "https://thenewstack.io/feed/", SourceType.RSS),
+    FeedSource("Martin Fowler", "https://martinfowler.com/feed.atom", SourceType.ATOM),
+    FeedSource("Netflix TechBlog", "https://netflixtechblog.com/feed"),
+    FeedSource("Meta Engineering", "https://engineering.fb.com/feed/", SourceType.RSS),
+    FeedSource(
+        "GitHub Engineering",
+        "https://github.blog/engineering/feed/",
+        SourceType.RSS,
+    ),
+    FeedSource("Cloudflare Blog", "https://blog.cloudflare.com/rss/", SourceType.RSS),
+    FeedSource("Spring Blog", "https://spring.io/blog.atom", SourceType.ATOM),
+    FeedSource("Kubernetes Blog", "https://kubernetes.io/feed.xml"),
+    FeedSource(
+        "OpenTelemetry Blog",
+        "https://opentelemetry.io/blog/index.xml",
+    ),
+    FeedSource("Playwright", "https://dev.to/feed/playwright", SourceType.RSS),
+    FeedSource(
+        "PostgreSQL News",
+        "https://www.postgresql.org/news.rss",
+        SourceType.RSS,
+    ),
+)
+
+
 def default_feed_sources() -> tuple[FeedSource, ...]:
-    sources: list[FeedSource] = []
-    sources.extend(
-        FeedSource("InfoQ", url, SourceType.RSS) for url in DEFAULT_INFOQ_FEEDS
-    )
-    sources.extend(
-        FeedSource("OSS Insight", url, SourceType.RSS)
-        for url in DEFAULT_OSS_INSIGHT_FEEDS
-    )
-    sources.extend(
-        FeedSource("Engineering Blog", url) for url in DEFAULT_ENGINEERING_BLOG_FEEDS
-    )
-    return tuple(sources)
+    return DEFAULT_FEED_SOURCES
 
 
 def default_github_release_sources() -> tuple[GitHubReleaseSource, ...]:
