@@ -16,6 +16,8 @@ Editor agents write one Markdown file per topic:
 - Each cited article must include its original URL.
 - The output must be suitable for Discord message publishing.
 - Do not include hidden metadata or JSON front matter.
+- Use `━━━━━━━━━━━━━━━━━━━━` for visual dividers. Do not use `---` horizontal rules.
+- Use bold text for minor labels. Do not use level-four `####` headings.
 
 ## Suggested Shape
 

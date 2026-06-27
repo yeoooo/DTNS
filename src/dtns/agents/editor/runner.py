@@ -28,6 +28,9 @@ DEFAULT_MODEL = "gemini-3.5-flash"
 MODEL_ENV_VAR = "DTNS_EDITOR_MODEL"
 GEMINI_MODEL_ENV_VAR = "GEMINI_MODEL"
 FENCE_RE = re.compile(r"^\s*```(?:markdown|md)?\s*|\s*```\s*$", re.IGNORECASE)
+HORIZONTAL_RULE_RE = re.compile(r"^\s*-{3,}\s*$", re.MULTILINE)
+LEVEL_FOUR_HEADING_RE = re.compile(r"^####\s+(.+?)\s*$", re.MULTILINE)
+DISCORD_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
 
 
 class TrendPeriod(BaseModel):
@@ -239,11 +242,20 @@ def normalize_markdown(markdown: str) -> str:
         raise ValueError("Editor model returned empty Markdown.")
 
     markdown = FENCE_RE.sub("", markdown).strip()
+    markdown = HORIZONTAL_RULE_RE.sub(DISCORD_DIVIDER, markdown)
+    markdown = LEVEL_FOUR_HEADING_RE.sub(_bold_heading, markdown)
     if markdown.startswith("{") or markdown.startswith("["):
         raise ValueError("Editor model returned JSON, but Markdown is required.")
     if not markdown.startswith("#"):
         markdown = f"# DTNS Newsletter\n\n{markdown}"
     return markdown
+
+
+def _bold_heading(match: re.Match[str]) -> str:
+    heading = match.group(1).strip()
+    if heading.startswith("**") and heading.endswith("**"):
+        return heading
+    return f"**{heading}**"
 
 
 def _request_newsletter(
@@ -292,7 +304,9 @@ def _universal_editor_rules(prefix: str | None = None) -> str:
         "Do not fully translate articles. Do not fabricate information. If "
         "article metadata is missing, do not invent titles, URLs, dates, or "
         "claims. Return Markdown only with no JSON, no front matter, and no "
-        "code fence."
+        "code fence. Never use '---' horizontal rules. Use '━━━━━━━━━━━━━━━━━━━━' "
+        "for a visual divider. Never use level-four headings starting with "
+        "'####'; use bold text instead."
     )
     if prefix is None:
         return rules
@@ -343,6 +357,8 @@ def _build_input_payload(
             "Generate weekly insights based only on supplied trend and article data.",
             "Do not fabricate missing article titles, URLs, dates, or source details.",
             "Cite original article URLs whenever URL metadata is supplied.",
+            "Use '━━━━━━━━━━━━━━━━━━━━' instead of '---' for visual dividers.",
+            "Use bold text instead of level-four headings starting with '####'.",
         ],
     }
     return payload
