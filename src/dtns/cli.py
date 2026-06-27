@@ -55,12 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     data_dir = args.data_dir
 
     if args.command == "collect":
-        from dtns.collectors.runner import write_articles
-
-        write_articles(
-            data_dir / ARTICLES_FILENAME,
-            limit_per_source=args.limit_per_source,
-        )
+        _run_collect(data_dir, limit_per_source=args.limit_per_source)
         return 0
 
     if args.command == "preprocess":
@@ -88,6 +83,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "run-all":
+        _run_collect(data_dir)
         _run_preprocess(data_dir)
         _run_tag(data_dir)
         _run_classify(data_dir)
@@ -99,6 +95,15 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+def _run_collect(data_dir: Path, *, limit_per_source: int | None = None) -> None:
+    from dtns.collectors.runner import write_articles
+
+    write_articles(
+        data_dir / ARTICLES_FILENAME,
+        limit_per_source=limit_per_source,
+    )
 
 
 def _run_preprocess(data_dir: Path) -> None:
