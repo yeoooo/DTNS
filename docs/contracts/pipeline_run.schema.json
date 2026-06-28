@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/pipeline_run.schema.json",
+  "title": "Pipeline Run Manifest",
+  "type": "object",
+  "required": ["schema_version", "run_id", "status", "started_at", "updated_at", "stages"],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "enum": ["running", "completed", "failed"] },
+    "started_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": ["string", "null"], "format": "date-time" },
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["stage_id", "status", "attempts", "input_fingerprints", "output_fingerprints"],
+        "properties": {
+          "stage_id": {
+            "type": "string",
+            "pattern": "^(collect|preprocess|tag|classify|trend:(technology|backend|qa)|edit:(technology|backend|qa)|publish:(technology|backend|qa))$"
+          },
+          "status": { "type": "string", "enum": ["pending", "running", "completed", "failed", "skipped"] },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "input_fingerprints": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "uniqueItems": true
+          },
+          "output_fingerprints": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "uniqueItems": true
+          },
+          "started_at": { "type": ["string", "null"], "format": "date-time" },
+          "finished_at": { "type": ["string", "null"], "format": "date-time" },
+          "error_category": { "type": ["string", "null"], "maxLength": 80 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

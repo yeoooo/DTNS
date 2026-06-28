@@ -11,10 +11,21 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from hashlib import sha256
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import httpx
+
+from dtns.publisher.receipt import (
+    PublishChunkReceipt,
+    PublishReceipt,
+    read_publish_receipt,
+    write_publish_receipt,
+)
 
 
 Topic = Literal["technology", "backend", "qa"]
@@ -52,6 +63,23 @@ class MissingWebhookURLError(PublisherError):
 class DiscordPublishError(PublisherError):
     """Raised when Discord rejects a webhook request."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        attempt_count: int,
+        status_code: int | None = None,
+        response_body: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.attempt_count = attempt_count
+        self.status_code = status_code
+        self.response_body = response_body
+
+
+class AmbiguousDiscordDeliveryError(PublisherError):
+    """Raised when a prior network failure may have delivered a chunk."""
+
 
 def publish_newsletter(
     input_path: Path | str,
@@ -61,27 +89,77 @@ def publish_newsletter(
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     client: httpx.Client | None = None,
+    receipt_root: Path | str | None = None,
+    run_id: str | None = None,
 ) -> PublishResult:
     """Read Markdown from ``input_path`` and publish it to Discord."""
 
     _load_dotenv()
-    if max_attempts <= 0:
-        raise ValueError("Discord publish max_attempts must be positive.")
+    if not 1 <= max_attempts <= DEFAULT_MAX_ATTEMPTS:
+        raise ValueError("Discord publish max_attempts must be between 1 and 5.")
     input_path = Path(input_path)
-    content = input_path.read_text(encoding="utf-8")
+    markdown_bytes = input_path.read_bytes()
+    content = markdown_bytes.decode("utf-8")
     messages = split_discord_messages(content)
     resolved_webhook_url = resolve_webhook_url(topic=topic, webhook_url=webhook_url)
+
+    receipt_path: Path | None = None
+    receipt: PublishReceipt | None = None
+    if topic is not None:
+        root = Path(receipt_root) if receipt_root is not None else input_path.parent
+        receipt_path, receipt = _prepare_publish_receipt(
+            root,
+            topic=topic,
+            run_id=run_id,
+            markdown_bytes=markdown_bytes,
+            webhook_url=resolved_webhook_url,
+            messages=messages,
+        )
 
     owns_client = client is None
     http_client = client or httpx.Client(timeout=timeout_seconds)
     try:
-        for message in messages:
-            _send_discord_message(
-                http_client,
-                resolved_webhook_url,
-                message,
-                max_attempts=max_attempts,
-            )
+        for index, message in enumerate(messages):
+            chunk_receipt = receipt.chunks[index] if receipt is not None else None
+            if chunk_receipt is not None and chunk_receipt.status == "delivered":
+                continue
+            if chunk_receipt is not None and chunk_receipt.status == "unknown":
+                raise AmbiguousDiscordDeliveryError(
+                    f"Discord chunk {index} has unknown delivery state; "
+                    "manual reconciliation is required before retrying."
+                )
+
+            try:
+                attempts = _send_discord_message(
+                    http_client,
+                    resolved_webhook_url,
+                    message,
+                    max_attempts=max_attempts,
+                )
+            except DiscordPublishError as error:
+                if receipt is not None and receipt_path is not None:
+                    chunk_receipt = receipt.chunks[index]
+                    chunk_receipt.attempts += error.attempt_count
+                    chunk_receipt.status = (
+                        "unknown" if error.status_code is None else "failed"
+                    )
+                    receipt.status = "failed"
+                    receipt.updated_at = datetime.now(UTC)
+                    write_publish_receipt(receipt_path, receipt)
+                raise
+
+            if receipt is not None and receipt_path is not None:
+                chunk_receipt = receipt.chunks[index]
+                chunk_receipt.attempts += attempts
+                chunk_receipt.status = "delivered"
+                chunk_receipt.delivered_at = datetime.now(UTC)
+                receipt.status = (
+                    "completed"
+                    if all(chunk.status == "delivered" for chunk in receipt.chunks)
+                    else "partial"
+                )
+                receipt.updated_at = datetime.now(UTC)
+                write_publish_receipt(receipt_path, receipt)
     finally:
         if owns_client:
             http_client.close()
@@ -100,6 +178,7 @@ def publish_topic_newsletter(
     *,
     webhook_url: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    run_id: str | None = None,
 ) -> PublishResult:
     """Publish ``<topic>_newsletter.md`` from ``data_dir``."""
 
@@ -110,6 +189,8 @@ def publish_topic_newsletter(
         topic=topic,
         webhook_url=webhook_url,
         timeout_seconds=timeout_seconds,
+        receipt_root=data_dir,
+        run_id=run_id,
     )
 
 
@@ -184,7 +265,7 @@ def _send_discord_message(
     content: str,
     *,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
-) -> None:
+) -> int:
     payload = {
         "content": content,
         "allowed_mentions": {"parse": []},
@@ -202,7 +283,7 @@ def _send_discord_message(
             continue
 
         if response.status_code < 400:
-            return
+            return attempt
 
         if response.status_code == 429:
             if attempt == max_attempts:
@@ -220,7 +301,8 @@ def _send_discord_message(
 
     raise DiscordPublishError(
         "Discord Webhook publish failed after "
-        f"{max_attempts} attempts due to a network error: {last_error}"
+        f"{max_attempts} attempts due to a network error: {last_error}",
+        attempt_count=max_attempts,
     ) from last_error
 
 
@@ -264,7 +346,101 @@ def _publish_error(response: httpx.Response, attempts: int) -> DiscordPublishErr
     return DiscordPublishError(
         "Discord Webhook publish failed "
         f"after {attempts} attempt(s) with HTTP {response.status_code}: "
-        f"{response.text}"
+        f"{response.text}",
+        attempt_count=attempts,
+        status_code=response.status_code,
+        response_body=response.text,
+    )
+
+
+def _prepare_publish_receipt(
+    data_dir: Path,
+    *,
+    topic: Topic,
+    run_id: str | None,
+    markdown_bytes: bytes,
+    webhook_url: str,
+    messages: list[str],
+) -> tuple[Path, PublishReceipt]:
+    newsletter_fingerprint = sha256(markdown_bytes).hexdigest()
+    webhook_fingerprint = sha256(
+        _normalize_webhook_url(webhook_url).encode("utf-8")
+    ).hexdigest()
+    path = (
+        data_dir
+        / ".state"
+        / "publisher"
+        / topic
+        / f"{newsletter_fingerprint}.{webhook_fingerprint}.json"
+    )
+    expected_chunks = [
+        PublishChunkReceipt(
+            index=index,
+            fingerprint=sha256(message.encode("utf-8")).hexdigest(),
+            character_count=len(message),
+        )
+        for index, message in enumerate(messages)
+    ]
+
+    existing = read_publish_receipt(path)
+    if existing is not None and _receipt_matches(
+        existing,
+        topic=topic,
+        newsletter_fingerprint=newsletter_fingerprint,
+        webhook_fingerprint=webhook_fingerprint,
+        expected_chunks=expected_chunks,
+    ):
+        return path, existing
+
+    now = datetime.now(UTC)
+    receipt = PublishReceipt(
+        run_id=run_id or uuid4().hex,
+        topic=topic,
+        newsletter_fingerprint=newsletter_fingerprint,
+        webhook_fingerprint=webhook_fingerprint,
+        status="pending",
+        chunks=expected_chunks,
+        updated_at=now,
+    )
+    write_publish_receipt(path, receipt)
+    return path, receipt
+
+
+def _receipt_matches(
+    receipt: PublishReceipt,
+    *,
+    topic: Topic,
+    newsletter_fingerprint: str,
+    webhook_fingerprint: str,
+    expected_chunks: list[PublishChunkReceipt],
+) -> bool:
+    if (
+        receipt.topic != topic
+        or receipt.newsletter_fingerprint != newsletter_fingerprint
+        or receipt.webhook_fingerprint != webhook_fingerprint
+        or len(receipt.chunks) != len(expected_chunks)
+    ):
+        return False
+
+    return all(
+        actual.index == expected.index
+        and actual.fingerprint == expected.fingerprint
+        and actual.character_count == expected.character_count
+        for actual, expected in zip(receipt.chunks, expected_chunks, strict=True)
+    )
+
+
+def _normalize_webhook_url(webhook_url: str) -> str:
+    parsed = urlsplit(webhook_url.strip())
+    normalized_path = parsed.path.rstrip("/") or "/"
+    return urlunsplit(
+        (
+            parsed.scheme.lower(),
+            parsed.netloc.lower(),
+            normalized_path,
+            parsed.query,
+            "",
+        )
     )
 
 

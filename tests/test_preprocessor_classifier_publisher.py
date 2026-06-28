@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 
-import pytest
 import httpx
+import pytest
+from pydantic import ValidationError
 
 from dtns.classifier import classify_articles
 from dtns.preprocessors import preprocess
-from dtns.publisher import publish_newsletter, split_discord_messages
 from dtns.publisher import stage as publisher_stage
+from dtns.publisher import (
+    AmbiguousDiscordDeliveryError,
+    DiscordPublishError,
+    publish_newsletter,
+    split_discord_messages,
+)
+from dtns.publisher.receipt import read_publish_receipt, write_publish_receipt
 
 
 def test_preprocess_deduplicates_and_removes_tracking_query(tmp_path):
@@ -177,3 +185,167 @@ def test_publisher_retries_transient_server_error(monkeypatch, tmp_path):
         )
 
     assert delays == [1.0]
+
+
+def test_publisher_skips_chunks_already_delivered(tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        for _ in range(2):
+            publish_newsletter(
+                input_path,
+                topic="technology",
+                webhook_url="https://discord.example/webhook-a",
+                client=client,
+            )
+
+    assert len(requests) == 1
+    receipt_path = next(
+        (tmp_path / ".state" / "publisher" / "technology").glob("*.json")
+    )
+    receipt = read_publish_receipt(receipt_path)
+    assert receipt is not None
+    assert receipt.status == "completed"
+    assert receipt.chunks[0].status == "delivered"
+
+
+def test_publisher_does_not_retry_unknown_chunk(tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    def handler(request):
+        requests.append(request)
+        raise httpx.ReadTimeout("ambiguous delivery", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(DiscordPublishError):
+            publish_newsletter(
+                input_path,
+                topic="backend",
+                webhook_url="https://discord.example/webhook",
+                max_attempts=1,
+                client=client,
+            )
+
+        with pytest.raises(AmbiguousDiscordDeliveryError):
+            publish_newsletter(
+                input_path,
+                topic="backend",
+                webhook_url="https://discord.example/webhook",
+                max_attempts=1,
+                client=client,
+            )
+
+    assert len(requests) == 1
+
+
+def test_publisher_keeps_receipts_for_each_webhook(tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    requested_urls: list[str] = []
+
+    def handler(request):
+        requested_urls.append(str(request.url))
+        return httpx.Response(204)
+
+    webhook_a = "https://discord.example/webhook-a"
+    webhook_b = "https://discord.example/webhook-b"
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        for webhook_url in (webhook_a, webhook_b, webhook_a):
+            publish_newsletter(
+                input_path,
+                topic="qa",
+                webhook_url=webhook_url,
+                client=client,
+            )
+
+    assert requested_urls == [webhook_a, webhook_b]
+    receipt_paths = list(
+        (tmp_path / ".state" / "publisher" / "qa").glob("*.json")
+    )
+    assert len(receipt_paths) == 2
+
+
+def test_write_publish_receipt_revalidates_and_replaces_atomically(
+    monkeypatch,
+    tmp_path,
+):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+
+    with httpx.Client(
+        transport=httpx.MockTransport(lambda request: httpx.Response(204))
+    ) as client:
+        publish_newsletter(
+            input_path,
+            topic="technology",
+            webhook_url="https://discord.example/webhook",
+            client=client,
+        )
+
+    receipt_path = next(
+        (tmp_path / ".state" / "publisher" / "technology").glob("*.json")
+    )
+    receipt = read_publish_receipt(receipt_path)
+    assert receipt is not None
+    receipt.chunks[0].attempts = -1
+    with pytest.raises(ValidationError):
+        write_publish_receipt(receipt_path, receipt)
+
+    receipt.chunks[0].attempts = 1
+    replacements: list[tuple[Path, Path]] = []
+    original_replace = Path.replace
+
+    def tracking_replace(source, target):
+        replacements.append((source, Path(target)))
+        return original_replace(source, target)
+
+    monkeypatch.setattr(Path, "replace", tracking_replace)
+    write_publish_receipt(receipt_path, receipt)
+
+    assert len(replacements) == 1
+    temporary_path, target_path = replacements[0]
+    assert temporary_path.parent == target_path.parent == receipt_path.parent
+    assert temporary_path.suffix == ".tmp"
+    assert target_path == receipt_path
+    assert list(receipt_path.parent.glob("*.tmp")) == []
+
+
+def test_publisher_rejects_corrupted_receipt(tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    request_count = 0
+
+    def handler(request):
+        nonlocal request_count
+        request_count += 1
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        publish_newsletter(
+            input_path,
+            topic="qa",
+            webhook_url="https://discord.example/webhook",
+            client=client,
+        )
+        receipt_path = next(
+            (tmp_path / ".state" / "publisher" / "qa").glob("*.json")
+        )
+        receipt_path.write_text('{"schema_version": "invalid"}', encoding="utf-8")
+
+        with pytest.raises(ValidationError):
+            publish_newsletter(
+                input_path,
+                topic="qa",
+                webhook_url="https://discord.example/webhook",
+                client=client,
+            )
+
+    assert request_count == 1

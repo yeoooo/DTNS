@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/collection_report.schema.json",
+  "title": "Collector Run Report",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "source_config_fingerprint",
+    "started_at",
+    "finished_at",
+    "status",
+    "sources"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "source_config_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "status": { "type": "string", "enum": ["completed", "partial", "failed"] },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "source_type", "status", "fetched_count", "accepted_count"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "source_type": { "type": "string", "enum": ["rss", "atom", "github_release", "api", "html"] },
+          "status": { "type": "string", "enum": ["success", "empty", "failed"] },
+          "fetched_count": { "type": "integer", "minimum": 0 },
+          "accepted_count": { "type": "integer", "minimum": 0 },
+          "http_status": { "type": ["integer", "null"], "minimum": 100, "maximum": 599 },
+          "error_category": {
+            "type": ["string", "null"],
+            "enum": [null, "timeout", "dns", "http_client", "http_server", "invalid_feed", "validation", "unknown"]
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "status": { "const": "failed" } } },
+            "then": {
+              "required": ["error_category"],
+              "properties": {
+                "fetched_count": { "const": 0 },
+                "accepted_count": { "const": 0 },
+                "error_category": { "type": "string" }
+              }
+            },
+            "else": {
+              "properties": { "error_category": { "const": null } }
+            }
+          },
+          {
+            "if": { "properties": { "status": { "const": "empty" } } },
+            "then": { "properties": { "accepted_count": { "const": 0 } } }
+          },
+          {
+            "if": { "properties": { "status": { "const": "success" } } },
+            "then": { "properties": { "accepted_count": { "minimum": 1 } } }
+          }
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "completed" } } },
+      "then": {
+        "properties": {
+          "sources": {
+            "not": {
+              "contains": { "properties": { "status": { "const": "failed" } } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "failed" } } },
+      "then": {
+        "properties": {
+          "sources": {
+            "not": {
+              "contains": {
+                "properties": {
+                  "status": { "enum": ["success", "empty"] }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "status": { "const": "partial" } } },
+      "then": {
+        "properties": {
+          "sources": {
+            "allOf": [
+              {
+                "contains": { "properties": { "status": { "const": "failed" } } }
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "status": { "enum": ["success", "empty"] }
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

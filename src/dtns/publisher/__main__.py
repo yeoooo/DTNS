@@ -60,6 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         topic=topic,
         webhook_url=args.webhook_url,
         timeout_seconds=args.timeout,
+        receipt_root=args.data_dir,
     )
     print(f"Published {result.message_count} Discord message(s).")
     return 0

@@ -8,16 +8,26 @@ trend and article metadata.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import html
 import json
 import os
 import re
-from datetime import date, datetime
+import tempfile
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from dtns.agents.gemini import generate_content_with_fallback
+from dtns.agents.editor.checkpoint import EditorGenerationCheckpoint
+from dtns.agents.execution_state import execution_state_path
+from dtns.agents.gemini import (
+    DEFAULT_FALLBACK_MODEL,
+    GenerationResult,
+    generate_content_with_fallback,
+    resolve_fallback_model,
+)
 
 
 TOPIC_TRENDS_FILENAME = "topic_trends.json"
@@ -31,6 +41,27 @@ FENCE_RE = re.compile(r"^\s*```(?:markdown|md)?\s*|\s*```\s*$", re.IGNORECASE)
 HORIZONTAL_RULE_RE = re.compile(r"^\s*-{3,}\s*$", re.MULTILINE)
 LEVEL_FOUR_HEADING_RE = re.compile(r"^####\s+(.+?)\s*$", re.MULTILINE)
 DISCORD_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
+STATE_DIRECTORY = Path(".state") / "editor"
+MAX_TRENDS = 8
+MAX_CHARACTERS = 12000
+MAX_CONTENT_ATTEMPTS = 2
+MAX_OUTPUT_TOKENS = 16384
+GENERATION_TEMPERATURE = 0.4
+VALIDATED_SECTIONS = ["title", "summary", "trends", "insights"]
+MIN_KOREAN_BODY_CHARACTERS = 10
+MIN_KOREAN_BODY_RATIO = 0.2
+HANGUL_RE = re.compile(r"[가-힣]")
+LATIN_RE = re.compile(r"[A-Za-z]")
+ATX_HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
+BOLD_LABEL_RE = re.compile(r"^\s*\*\*[^*]+\*\*\s*$", re.MULTILINE)
+URL_START_RE = re.compile(r"https?://")
+FRONT_MATTER_RE = re.compile(r"\A\s*---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
+SECTION_PATTERNS = {
+    "title": re.compile(r"^#\s+\S+", re.MULTILINE),
+    "summary": re.compile(r"^##\s+.*핵심\s*요약\s*$", re.MULTILINE),
+    "trends": re.compile(r"^##\s+.*주요\s*트렌드\s*$", re.MULTILINE),
+    "insights": re.compile(r"^##\s+.*이번\s*주\s*인사이트\s*$", re.MULTILINE),
+}
 
 
 class TrendPeriod(BaseModel):
@@ -64,9 +95,9 @@ class TrendsFile(BaseModel):
 
     schema_version: Literal["1.0"]
     generated_at: datetime
-    topic: str
+    topic: Literal["technology", "backend", "qa"]
     period: TrendPeriod | None = None
-    trends: list[Trend] = Field(default_factory=list)
+    trends: list[Trend] = Field(default_factory=list, max_length=MAX_TRENDS)
 
     @field_validator("topic")
     @classmethod
@@ -119,7 +150,7 @@ class TopicArticlesFile(BaseModel):
 
     schema_version: Literal["1.0"]
     generated_at: datetime
-    topic: str
+    topic: Literal["technology", "backend", "qa"]
     articles: list[TopicArticle] = Field(default_factory=list)
 
     @field_validator("topic")
@@ -130,6 +161,10 @@ class TopicArticlesFile(BaseModel):
         return value
 
 
+class EditorContentError(ValueError):
+    """A recoverable model-content failure."""
+
+
 def write_newsletter(
     input_path: Path | str,
     output_path: Path | str,
@@ -137,31 +172,87 @@ def write_newsletter(
     articles_path: Path | str | None = None,
     model: str | None = None,
     client: Any | None = None,
+    run_id: str | None = None,
+    state_path: Path | str | None = None,
+    ai_state_path: Path | str | None = None,
 ) -> str:
-    """Read topic trends, generate Korean Markdown, and write newsletter.md."""
+    """Generate, validate, checkpoint, and atomically finalize a newsletter."""
 
     _load_dotenv()
     input_path = Path(input_path)
     output_path = Path(output_path)
     model = resolve_model(model)
 
+    input_bytes = input_path.read_bytes()
     trends_file = TrendsFile.model_validate(_read_json(input_path))
     topic_articles = _load_topic_articles(articles_path, trends_file.topic)
     _validate_article_references(trends_file, topic_articles)
 
+    articles_bytes = (
+        Path(articles_path).read_bytes() if articles_path is not None else b""
+    )
+    input_fingerprint = _fingerprint(input_bytes + b"\0" + articles_bytes)
+    fallback_model = resolve_fallback_model()
+    policy_fingerprint = _policy_fingerprint(
+        topic=trends_file.topic,
+        model=model,
+        fallback_model=fallback_model,
+    )
+    selected_run_id = run_id or (
+        f"{input_fingerprint[:16]}-{policy_fingerprint[:16]}"
+    )
+    _validate_run_id(selected_run_id)
+    selected_ai_state_path = (
+        Path(ai_state_path)
+        if ai_state_path is not None
+        else execution_state_path(output_path.parent, selected_run_id)
+    )
+    selected_state_path = Path(state_path) if state_path else (
+        output_path.parent
+        / STATE_DIRECTORY
+        / trends_file.topic
+        / selected_run_id
+    )
+    known_urls = {article.canonical_url for article in topic_articles}
+
+    resumed = _load_valid_candidate(
+        state_path=selected_state_path,
+        run_id=selected_run_id,
+        topic=trends_file.topic,
+        input_fingerprint=input_fingerprint,
+        policy_fingerprint=policy_fingerprint,
+        known_urls=known_urls,
+    )
+    if resumed is not None:
+        _atomic_write_text(output_path, resumed + "\n")
+        return resumed
+
     if not trends_file.trends:
         markdown = _empty_newsletter(trends_file.topic)
+        actual_model = "deterministic-empty"
     else:
-        markdown = _request_newsletter(
+        markdown, actual_model = _generate_valid_newsletter(
             trends_file,
             topic_articles=topic_articles,
             model=model,
+            fallback_model=fallback_model,
             client=client,
+            known_urls=known_urls,
+            run_id=selected_run_id,
+            ai_state_path=selected_ai_state_path,
         )
-    markdown = normalize_markdown(markdown)
+    markdown = validate_markdown(normalize_markdown(markdown), known_urls=known_urls)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(markdown + "\n", encoding="utf-8")
+    _write_candidate_and_checkpoint(
+        markdown=markdown,
+        model=actual_model,
+        state_path=selected_state_path,
+        run_id=selected_run_id,
+        topic=trends_file.topic,
+        input_fingerprint=input_fingerprint,
+        policy_fingerprint=policy_fingerprint,
+    )
+    _atomic_write_text(output_path, markdown + "\n")
     return markdown
 
 
@@ -176,6 +267,8 @@ def _empty_newsletter(topic: str) -> str:
         f"# 🗞️ 이번 주 {topic_name} 뉴스레터\n\n"
         "## 🔎 핵심 요약\n\n"
         "- 이번 실행에서 해당 토픽으로 분류된 주요 기사가 없습니다.\n\n"
+        "## 📌 주요 트렌드\n\n"
+        "- 이번 주에 정리할 주요 트렌드가 없습니다.\n\n"
         "## 💡 이번 주 인사이트\n\n"
         "수집 소스, 태그 규칙, 분류 규칙을 점검한 뒤 다음 실행에서 다시 확인합니다."
     )
@@ -209,6 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
             f"$GEMINI_MODEL, or {DEFAULT_MODEL}."
         ),
     )
+    parser.add_argument("--run-id", default=None)
+    parser.add_argument("--state-path", default=None, type=Path)
     return parser
 
 
@@ -219,6 +314,8 @@ def main(argv: list[str] | None = None) -> int:
         output_path=args.output,
         articles_path=args.articles,
         model=args.model,
+        run_id=args.run_id,
+        state_path=args.state_path,
     )
     return 0
 
@@ -240,15 +337,194 @@ def normalize_markdown(markdown: str) -> str:
     markdown = markdown.strip()
     if not markdown:
         raise ValueError("Editor model returned empty Markdown.")
-
-    markdown = FENCE_RE.sub("", markdown).strip()
-    markdown = HORIZONTAL_RULE_RE.sub(DISCORD_DIVIDER, markdown)
-    markdown = LEVEL_FOUR_HEADING_RE.sub(_bold_heading, markdown)
+    if "```" in markdown or FENCE_RE.search(markdown):
+        raise ValueError("Editor model returned a code fence.")
+    if FRONT_MATTER_RE.match(markdown):
+        raise ValueError("Editor model returned front matter.")
     if markdown.startswith("{") or markdown.startswith("["):
         raise ValueError("Editor model returned JSON, but Markdown is required.")
-    if not markdown.startswith("#"):
-        markdown = f"# DTNS Newsletter\n\n{markdown}"
+    markdown = HORIZONTAL_RULE_RE.sub(DISCORD_DIVIDER, markdown)
+    markdown = LEVEL_FOUR_HEADING_RE.sub(_bold_heading, markdown)
     return markdown
+
+
+def validate_markdown(markdown: str, *, known_urls: set[str]) -> str:
+    """Validate the public newsletter contract and return unchanged Markdown."""
+
+    if not markdown or len(markdown) > MAX_CHARACTERS:
+        raise ValueError("Editor Markdown must contain 1 to 12,000 characters.")
+    missing = [
+        section for section, pattern in SECTION_PATTERNS.items()
+        if pattern.search(markdown) is None
+    ]
+    if missing:
+        raise ValueError(
+            "Editor Markdown is missing required sections: " + ", ".join(missing)
+        )
+    output_urls = _extract_article_urls(markdown)
+    unknown_urls = sorted(output_urls - known_urls)
+    if unknown_urls:
+        raise ValueError(
+            "Editor Markdown contains unknown article URLs: "
+            + ", ".join(unknown_urls)
+        )
+    _validate_korean_body(markdown)
+    return markdown
+
+
+def _extract_article_urls(markdown: str) -> set[str]:
+    """Extract inline-link destinations and bare URLs without regex truncation."""
+
+    destinations, link_ranges = _parse_inline_link_destinations(markdown)
+    masked = list(markdown)
+    for start, end in link_ranges:
+        masked[start:end] = " " * (end - start)
+    return set(destinations) | set(_parse_bare_urls("".join(masked)))
+
+
+def _parse_inline_link_destinations(
+    markdown: str,
+) -> tuple[list[str], list[tuple[int, int]]]:
+    destinations: list[str] = []
+    ranges: list[tuple[int, int]] = []
+    cursor = 0
+    while True:
+        opener = markdown.find("](", cursor)
+        if opener < 0:
+            break
+        parsed = _parse_link_destination(markdown, opener + 2)
+        if parsed is None:
+            cursor = opener + 2
+            continue
+        destination, end = parsed
+        if destination.startswith(("http://", "https://")):
+            destinations.append(destination)
+        ranges.append((opener, end))
+        cursor = end
+    return destinations, ranges
+
+
+def _parse_link_destination(markdown: str, start: int) -> tuple[str, int] | None:
+    cursor = start
+    while cursor < len(markdown) and markdown[cursor] in " \t\n":
+        cursor += 1
+    if cursor >= len(markdown):
+        return None
+
+    if markdown[cursor] == "<":
+        destination_start = cursor + 1
+        cursor = destination_start
+        while cursor < len(markdown):
+            if markdown[cursor] == "\\":
+                cursor += 2
+                continue
+            if markdown[cursor] == ">":
+                destination = markdown[destination_start:cursor]
+                cursor += 1
+                break
+            if markdown[cursor] in "\n<":
+                return None
+            cursor += 1
+        else:
+            return None
+    else:
+        destination_start = cursor
+        depth = 0
+        while cursor < len(markdown):
+            character = markdown[cursor]
+            if character == "\\" and cursor + 1 < len(markdown):
+                cursor += 2
+                continue
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            elif character.isspace() and depth == 0:
+                break
+            cursor += 1
+        if cursor == destination_start or depth != 0:
+            return None
+        destination = markdown[destination_start:cursor]
+
+    while cursor < len(markdown) and markdown[cursor].isspace():
+        cursor += 1
+    if cursor < len(markdown) and markdown[cursor] in {'"', "'"}:
+        quote = markdown[cursor]
+        cursor = _skip_link_title(markdown, cursor + 1, quote)
+        if cursor < 0:
+            return None
+    elif cursor < len(markdown) and markdown[cursor] == "(":
+        cursor = _skip_link_title(markdown, cursor + 1, ")")
+        if cursor < 0:
+            return None
+    while cursor < len(markdown) and markdown[cursor].isspace():
+        cursor += 1
+    if cursor >= len(markdown) or markdown[cursor] != ")":
+        return None
+    return _unescape_markdown(destination), cursor + 1
+
+
+def _skip_link_title(markdown: str, cursor: int, closing: str) -> int:
+    while cursor < len(markdown):
+        if markdown[cursor] == "\\" and cursor + 1 < len(markdown):
+            cursor += 2
+            continue
+        if markdown[cursor] == closing:
+            return cursor + 1
+        if markdown[cursor] == "\n":
+            return -1
+        cursor += 1
+    return -1
+
+
+def _unescape_markdown(value: str) -> str:
+    unescaped = re.sub(
+        r"\\([!\"#$%&'()*+,\-./:;<=>?@\[\\\]^_`{|}~])",
+        r"\1",
+        value,
+    )
+    return html.unescape(unescaped)
+
+
+def _parse_bare_urls(markdown: str) -> list[str]:
+    urls: list[str] = []
+    search_start = 0
+    while match := URL_START_RE.search(markdown, search_start):
+        cursor = match.start()
+        depth = 0
+        while cursor < len(markdown):
+            character = markdown[cursor]
+            if character.isspace() or character in '<>"':
+                break
+            if character == "(":
+                depth += 1
+            elif character == ")":
+                if depth == 0:
+                    break
+                depth -= 1
+            cursor += 1
+        url = markdown[match.start():cursor].rstrip(".,;:!?")
+        if url:
+            urls.append(url)
+        search_start = max(cursor, match.end())
+    return urls
+
+
+def _validate_korean_body(markdown: str) -> None:
+    body = ATX_HEADING_RE.sub("", markdown)
+    body = BOLD_LABEL_RE.sub("", body)
+    body = re.sub(r"https?://\S+", "", body)
+    hangul_count = len(HANGUL_RE.findall(body))
+    latin_count = len(LATIN_RE.findall(body))
+    language_characters = hangul_count + latin_count
+    korean_ratio = hangul_count / language_characters if language_characters else 0
+    if (
+        hangul_count < MIN_KOREAN_BODY_CHARACTERS
+        or korean_ratio < MIN_KOREAN_BODY_RATIO
+    ):
+        raise ValueError("Editor Markdown body must be written in Korean.")
 
 
 def _bold_heading(match: re.Match[str]) -> str:
@@ -263,10 +539,15 @@ def _request_newsletter(
     *,
     topic_articles: list[TopicArticle],
     model: str,
+    fallback_model: str,
     client: Any | None,
-) -> str:
+    policy_primary_model: str,
+    run_id: str,
+    ai_state_path: Path,
+) -> tuple[str, str, GenerationResult]:
     generation = generate_content_with_fallback(
         primary_model=model,
+        fallback_model=fallback_model,
         contents=[
             _build_system_prompt(trends_file.topic),
             json.dumps(
@@ -275,15 +556,68 @@ def _request_newsletter(
                 indent=2,
             ),
         ],
-        config={"temperature": 0.4},
+        config={
+            "temperature": GENERATION_TEMPERATURE,
+            "max_output_tokens": MAX_OUTPUT_TOKENS,
+        },
         client=client,
+        run_id=run_id,
+        execution_state_path=ai_state_path,
+        policy_primary_model=policy_primary_model,
+        use_requested_model_when_closed=True,
     )
     response = generation.response
 
+    _reject_truncated_response(response)
+
     content = getattr(response, "text", None)
     if not content:
-        raise ValueError("Editor model returned empty Markdown.")
-    return str(content)
+        raise EditorContentError("Editor model returned empty Markdown.")
+    return str(content), generation.model, generation
+
+
+def _generate_valid_newsletter(
+    trends_file: TrendsFile,
+    *,
+    topic_articles: list[TopicArticle],
+    model: str,
+    fallback_model: str,
+    client: Any | None,
+    known_urls: set[str],
+    run_id: str,
+    ai_state_path: Path,
+) -> tuple[str, str]:
+    """Retry one content failure, then make one explicit fallback attempt."""
+
+    last_error: ValueError | None = None
+    requested_models = [model] * MAX_CONTENT_ATTEMPTS
+    if fallback_model != model:
+        requested_models.append(fallback_model)
+    for requested_model in requested_models:
+        try:
+            raw_markdown, actual_model, generation = _request_newsletter(
+                trends_file,
+                topic_articles=topic_articles,
+                model=requested_model,
+                fallback_model=fallback_model,
+                client=client,
+                policy_primary_model=model,
+                run_id=run_id,
+                ai_state_path=ai_state_path,
+            )
+        except EditorContentError as error:
+            last_error = error
+            continue
+        try:
+            markdown = normalize_markdown(raw_markdown)
+            validated = validate_markdown(markdown, known_urls=known_urls)
+            accept = getattr(generation, "accept", None)
+            if callable(accept):
+                accept()
+            return validated, actual_model
+        except ValueError as error:
+            last_error = error
+    raise ValueError("Editor generation failed content validation.") from last_error
 
 
 def _build_system_prompt(topic: str) -> str:
@@ -306,7 +640,10 @@ def _universal_editor_rules(prefix: str | None = None) -> str:
         "claims. Return Markdown only with no JSON, no front matter, and no "
         "code fence. Never use '---' horizontal rules. Use '━━━━━━━━━━━━━━━━━━━━' "
         "for a visual divider. Never use level-four headings starting with "
-        "'####'; use bold text instead."
+        "'####'; use bold text instead. Include a level-one title and the exact "
+        "level-two sections '핵심 요약', '주요 트렌드', and '이번 주 인사이트'. "
+        "Use only supplied canonical article URLs and stay within 12,000 "
+        "characters."
     )
     if prefix is None:
         return rules
@@ -359,6 +696,8 @@ def _build_input_payload(
             "Cite original article URLs whenever URL metadata is supplied.",
             "Use '━━━━━━━━━━━━━━━━━━━━' instead of '---' for visual dividers.",
             "Use bold text instead of level-four headings starting with '####'.",
+            "Include title, 핵심 요약, 주요 트렌드, and 이번 주 인사이트 sections.",
+            "Keep the complete output within 12,000 characters.",
         ],
     }
     return payload
@@ -422,6 +761,159 @@ def _validate_article_references(
                 f"trend '{trend.id}' references unknown article IDs: "
                 f"{', '.join(missing_ids)}"
             )
+
+
+def _reject_truncated_response(response: Any) -> None:
+    reasons: list[Any] = [getattr(response, "finish_reason", None)]
+    candidates = getattr(response, "candidates", None) or []
+    reasons.extend(getattr(candidate, "finish_reason", None) for candidate in candidates)
+    for reason in reasons:
+        if reason is None:
+            continue
+        name = getattr(reason, "name", str(reason)).upper()
+        if "MAX_TOKENS" in name or "LENGTH" in name:
+            raise EditorContentError("Editor model response was truncated.")
+
+
+def _write_candidate_and_checkpoint(
+    *,
+    markdown: str,
+    model: str,
+    state_path: Path,
+    run_id: str,
+    topic: Literal["technology", "backend", "qa"],
+    input_fingerprint: str,
+    policy_fingerprint: str,
+) -> None:
+    candidate_path = state_path / "candidate.md"
+    _atomic_write_text(candidate_path, markdown)
+    checkpoint = EditorGenerationCheckpoint(
+        run_id=run_id,
+        topic=topic,
+        input_fingerprint=input_fingerprint,
+        policy_fingerprint=policy_fingerprint,
+        model=model,
+        candidate_fingerprint=_fingerprint(markdown.encode("utf-8")),
+        character_count=len(markdown),
+        validated_sections=VALIDATED_SECTIONS,
+        generated_at=datetime.now(UTC),
+    )
+    _atomic_write_text(
+        state_path / "checkpoint.json",
+        checkpoint.model_dump_json(indent=2) + "\n",
+    )
+
+
+def _load_valid_candidate(
+    *,
+    state_path: Path,
+    run_id: str,
+    topic: Literal["technology", "backend", "qa"],
+    input_fingerprint: str,
+    policy_fingerprint: str,
+    known_urls: set[str],
+) -> str | None:
+    checkpoint_path = state_path / "checkpoint.json"
+    candidate_path = state_path / "candidate.md"
+    if not checkpoint_path.is_file() or not candidate_path.is_file():
+        return None
+    try:
+        checkpoint = EditorGenerationCheckpoint.model_validate_json(
+            checkpoint_path.read_text(encoding="utf-8")
+        )
+        candidate = candidate_path.read_text(encoding="utf-8")
+        if (
+            checkpoint.run_id != run_id
+            or checkpoint.topic != topic
+            or checkpoint.input_fingerprint != input_fingerprint
+            or checkpoint.policy_fingerprint != policy_fingerprint
+            or checkpoint.candidate_filename != candidate_path.name
+            or checkpoint.candidate_fingerprint
+            != _fingerprint(candidate.encode("utf-8"))
+            or checkpoint.character_count != len(candidate)
+        ):
+            return None
+        return validate_markdown(normalize_markdown(candidate), known_urls=known_urls)
+    except (OSError, ValidationError, ValueError):
+        return None
+
+
+def _policy_fingerprint(
+    *, topic: str, model: str, fallback_model: str | None
+) -> str:
+    policy = {
+        "checkpoint_schema_version": SCHEMA_VERSION,
+        "validation_version": "2",
+        "prompt": _build_system_prompt(topic),
+        "models": {
+            "primary": model,
+            "fallback": fallback_model or DEFAULT_FALLBACK_MODEL,
+        },
+        "limits": {
+            "trends": MAX_TRENDS,
+            "characters": MAX_CHARACTERS,
+            "content_attempts": MAX_CONTENT_ATTEMPTS,
+            "output_tokens": MAX_OUTPUT_TOKENS,
+            "minimum_korean_body_characters": MIN_KOREAN_BODY_CHARACTERS,
+            "minimum_korean_body_ratio": MIN_KOREAN_BODY_RATIO,
+        },
+        "generation": {"temperature": GENERATION_TEMPERATURE},
+        "sections": VALIDATED_SECTIONS,
+    }
+    return _fingerprint(
+        json.dumps(policy, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    )
+
+
+def _fingerprint(value: bytes) -> str:
+    return hashlib.sha256(value).hexdigest()
+
+
+def _validate_run_id(run_id: str) -> None:
+    if not run_id or Path(run_id).name != run_id or run_id in {".", ".."}:
+        raise ValueError("run_id must be a non-empty path segment")
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    _ensure_durable_directory(path.parent)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            temporary_path = Path(temporary.name)
+        os.replace(temporary_path, path)
+        _fsync_directory(path.parent)
+    finally:
+        if temporary_path is not None and temporary_path.exists():
+            temporary_path.unlink()
+
+
+def _ensure_durable_directory(directory: Path) -> None:
+    missing: list[Path] = []
+    current = directory
+    while not current.exists():
+        missing.append(current)
+        current = current.parent
+    for path in reversed(missing):
+        path.mkdir(exist_ok=True)
+        _fsync_directory(path.parent)
+
+
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _read_json(path: Path) -> Any:

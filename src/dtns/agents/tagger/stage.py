@@ -20,8 +20,10 @@ from typing import Any, Protocol
 from jsonschema import Draft202012Validator, FormatChecker
 from pydantic import ValidationError
 
+from dtns.agents.execution_state import execution_state_path
 from dtns.agents.gemini import (
     DEFAULT_FALLBACK_MODEL,
+    GenerationResult,
     generate_content_with_fallback,
     resolve_fallback_model,
 )
@@ -63,6 +65,7 @@ logger = logging.getLogger(__name__)
 class TaggerResponse:
     payload: Mapping[str, Any]
     model: str
+    generation: GenerationResult | None = None
 
 
 class LLMClient(Protocol):
@@ -83,6 +86,8 @@ class GeminiTaggerClient:
     prompt_path: Path = PROMPT_PATH
     preferred_model: str | None = field(default=None, init=False)
     attempted_models: list[str] = field(default_factory=list, init=False)
+    run_id: str | None = field(default=None, init=False)
+    execution_state_path: Path | None = field(default=None, init=False)
 
     def tag(self, articles: Sequence[NormalizedArticle]) -> TaggerResponse:
         _load_dotenv()
@@ -111,6 +116,9 @@ class GeminiTaggerClient:
                     "response_json_schema": _tagger_response_schema(),
                     "max_output_tokens": MAX_OUTPUT_TOKENS,
                 },
+                run_id=self.run_id,
+                execution_state_path=self.execution_state_path,
+                policy_primary_model=self.model,
             )
         except Exception as error:
             if (
@@ -126,11 +134,10 @@ class GeminiTaggerClient:
         if not content:
             raise BatchResponseError("invalid_json", "LLM returned an empty response")
 
-        if generation.model == self.fallback_model:
-            self.preferred_model = self.fallback_model
         return TaggerResponse(
             payload=_parse_json_object(content),
             model=generation.model,
+            generation=generation,
         )
 
 
@@ -187,6 +194,7 @@ def tag_articles(
     model: str | None = None,
     run_id: str | None = None,
     state_path: Path | str | None = None,
+    ai_state_path: Path | str | None = None,
 ) -> TaggedArticlesDocument:
     """Tag normalized articles, resuming valid completed batch checkpoints."""
 
@@ -208,6 +216,13 @@ def tag_articles(
         policy_fingerprint,
     )
     _validate_run_id(selected_run_id)
+    if isinstance(client, GeminiTaggerClient):
+        client.run_id = selected_run_id
+        client.execution_state_path = (
+            Path(ai_state_path)
+            if ai_state_path is not None
+            else execution_state_path(output_path.parent, selected_run_id)
+        )
     selected_state_path = Path(state_path) if state_path else (
         output_path.parent / STATE_DIRECTORY / selected_run_id
     )
@@ -300,13 +315,24 @@ def _process_range(
             raise client_failure
 
         try:
-            payload, response_model = _unpack_response(response, context.llm_client)
+            payload, response_model, generation = _unpack_response(
+                response, context.llm_client
+            )
             _append_unique(context.attempted_models, response_model)
             checkpoint_articles = _validate_batch_output(
                 articles,
                 payload,
                 model=response_model,
             )
+            if generation is not None:
+                accept = getattr(generation, "accept", None)
+                if callable(accept):
+                    accept()
+                if (
+                    isinstance(context.llm_client, GeminiTaggerClient)
+                    and response_model == context.llm_client.fallback_model
+                ):
+                    context.llm_client.preferred_model = response_model
             checkpoint = TaggerBatchCheckpoint(
                 run_id=context.run_id,
                 input_fingerprint=context.input_fingerprint,
@@ -754,12 +780,12 @@ def _restore_model_preference(
 def _unpack_response(
     response: Mapping[str, Any] | TaggerResponse,
     client: LLMClient,
-) -> tuple[Mapping[str, Any], str]:
+) -> tuple[Mapping[str, Any], str, GenerationResult | None]:
     if isinstance(response, TaggerResponse):
-        return response.payload, response.model
+        return response.payload, response.model, response.generation
     if not isinstance(response, Mapping):
         raise BatchResponseError("invalid_schema", "LLM response must be an object")
-    return response, client.model
+    return response, client.model, None
 
 
 def _extract_tag_items(payload: Mapping[str, Any]) -> list[Mapping[str, Any]]:

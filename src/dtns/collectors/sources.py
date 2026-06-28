@@ -23,6 +23,10 @@ DEFAULT_GITHUB_RELEASE_REPOSITORIES = (
 )
 
 
+class InvalidFeedError(ValueError):
+    """Raised when a response cannot be interpreted as a feed."""
+
+
 @dataclass(frozen=True)
 class FeedSource:
     name: str
@@ -90,7 +94,7 @@ def fetch_feed_articles(
 ) -> list[RawArticle]:
     response = client.get(source.url)
     response.raise_for_status()
-    feed = feedparser.parse(response.content)
+    feed = _parse_feed(response.content)
     source_type = source.source_type or _source_type_from_feed(feed)
 
     articles: list[RawArticle] = []
@@ -129,7 +133,7 @@ def fetch_github_release_articles(
 ) -> list[RawArticle]:
     response = client.get(source.url)
     response.raise_for_status()
-    feed = feedparser.parse(response.content)
+    feed = _parse_feed(response.content)
 
     articles: list[RawArticle] = []
     for entry in _limited(feed.entries, limit):
@@ -158,6 +162,17 @@ def _limited(items: Iterable[Any], limit: int | None) -> Iterable[Any]:
     if limit is None:
         return items
     return list(items)[:limit]
+
+
+def _parse_feed(content: bytes) -> Any:
+    feed = feedparser.parse(content)
+    version = str(getattr(feed, "version", "")).lower()
+    is_supported_feed = version.startswith(("rss", "atom"))
+    if not is_supported_feed or (
+        getattr(feed, "bozo", False) and not feed.entries
+    ):
+        raise InvalidFeedError("response is not a valid RSS or Atom feed")
+    return feed
 
 
 def _source_type_from_feed(feed: Any) -> SourceType:

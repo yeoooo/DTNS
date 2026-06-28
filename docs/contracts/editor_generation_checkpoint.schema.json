@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/editor_generation_checkpoint.schema.json",
+  "title": "Editor Generation Checkpoint",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "topic",
+    "input_fingerprint",
+    "policy_fingerprint",
+    "model",
+    "candidate_filename",
+    "candidate_fingerprint",
+    "character_count",
+    "validated_sections",
+    "generated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "topic": { "type": "string", "enum": ["technology", "backend", "qa"] },
+    "input_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "policy_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "model": { "type": "string", "minLength": 1 },
+    "candidate_filename": { "const": "candidate.md" },
+    "candidate_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "character_count": { "type": "integer", "minimum": 1, "maximum": 12000 },
+    "validated_sections": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["title", "summary", "trends", "insights"]
+      },
+      "uniqueItems": true,
+      "minItems": 4,
+      "maxItems": 4
+    },
+    "generated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

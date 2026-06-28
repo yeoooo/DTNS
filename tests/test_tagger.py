@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from dtns.agents import gemini
 from dtns.agents.tagger import stage
 from dtns.agents.tagger.stage import (
     BatchResponseError,
@@ -449,6 +450,44 @@ def test_transient_exhaustion_reports_primary_and_fallback(tmp_path, monkeypatch
 
     assert caught.value.category == "transient_api"
     assert caught.value.models == ("primary-model", "fallback-model")
+
+
+def test_invalid_fallback_json_does_not_open_shared_circuit(tmp_path, monkeypatch):
+    input_path = tmp_path / "normalized_articles.json"
+    output_path = tmp_path / "tagged_articles.json"
+    ai_state_path = tmp_path / "execution_state.json"
+    _write_normalized_articles(input_path, 1)
+
+    class InvalidFallbackModels:
+        def generate_content(self, *, model, contents, config):
+            if model == "primary-model":
+                raise StatusError(503, "temporarily unavailable")
+            return SimpleNamespace(text="not-json", candidates=[])
+
+    raw_client = SimpleNamespace(models=InvalidFallbackModels())
+
+    def generate(**kwargs):
+        return gemini.generate_content_with_fallback(client=raw_client, **kwargs)
+
+    monkeypatch.setattr(stage, "generate_content_with_fallback", generate)
+    monkeypatch.setattr(gemini.time, "sleep", lambda _: None)
+
+    with pytest.raises(TaggerRunError):
+        tag_articles(
+            input_path,
+            output_path,
+            llm_client=GeminiTaggerClient(
+                model="primary-model",
+                fallback_model="fallback-model",
+            ),
+            run_id="invalid-fallback",
+            ai_state_path=ai_state_path,
+        )
+
+    state = json.loads(ai_state_path.read_text(encoding="utf-8"))
+    assert state["circuit_state"] == "closed"
+    assert state["preferred_model"] == "primary-model"
+    assert state["fallback_successes"] == 0
 
 
 def test_invalid_input_is_rejected_before_llm_or_checkpoint_side_effects(tmp_path):

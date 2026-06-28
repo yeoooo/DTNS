@@ -1,6 +1,7 @@
 """Discord publisher stage."""
 
 from dtns.publisher.stage import (
+    AmbiguousDiscordDeliveryError,
     DiscordPublishError,
     DISCORD_CONTENT_LIMIT,
     MissingWebhookURLError,
@@ -13,6 +14,7 @@ from dtns.publisher.stage import (
 )
 
 __all__ = [
+    "AmbiguousDiscordDeliveryError",
     "DiscordPublishError",
     "DISCORD_CONTENT_LIMIT",
     "MissingWebhookURLError",

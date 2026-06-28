@@ -5,6 +5,7 @@ from .runner import (
     TOPIC_ARTICLES_FILENAME,
     TOPIC_TRENDS_FILENAME,
     normalize_markdown,
+    validate_markdown,
     write_newsletter,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "TOPIC_ARTICLES_FILENAME",
     "TOPIC_TRENDS_FILENAME",
     "normalize_markdown",
+    "validate_markdown",
     "write_newsletter",
 ]

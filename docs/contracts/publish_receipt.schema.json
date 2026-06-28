@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/publish_receipt.schema.json",
+  "title": "Discord Publish Receipt",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "topic",
+    "newsletter_fingerprint",
+    "webhook_fingerprint",
+    "status",
+    "chunks",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "topic": { "type": "string", "enum": ["technology", "backend", "qa"] },
+    "newsletter_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "webhook_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "status": { "type": "string", "enum": ["pending", "partial", "completed", "failed"] },
+    "chunks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "fingerprint", "character_count", "status", "attempts"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 0 },
+          "fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "character_count": { "type": "integer", "minimum": 1, "maximum": 2000 },
+          "status": { "type": "string", "enum": ["pending", "delivered", "failed", "unknown"] },
+          "attempts": { "type": "integer", "minimum": 0 },
+          "delivered_at": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "additionalProperties": false
+      }
+    },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "additionalProperties": false
+}

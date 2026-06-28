@@ -27,3 +27,18 @@ Internal processing contracts:
   resume rules.
 - `tagger_batch_checkpoint.schema.json`: completed Tagger batch checkpoint
   format.
+- `trend_batch_processing.md`: bounded Trend Map-Reduce, checkpointing, and
+  recovery rules.
+- `trend_candidate_checkpoint.schema.json`: Trend Map and Reduce candidate
+  checkpoint format.
+- `ai_execution_state.md` and `ai_execution_state.schema.json`: shared Gemini
+  circuit state for one pipeline run.
+- `editor_generation_checkpoint.md` and
+  `editor_generation_checkpoint.schema.json`: validated Markdown candidate
+  checkpoint.
+- `publish_receipt.md` and `publish_receipt.schema.json`: Discord chunk delivery
+  receipt and duplicate prevention.
+- `collection_report.md` and `collection_report.schema.json`: source-level
+  Collector health report.
+- `pipeline_run.md` and `pipeline_run.schema.json`: stage status, artifact
+  fingerprints, and run-all resume rules.

@@ -10,7 +10,16 @@ Inputs:
 
 Outputs:
 
-- `newsletter.md`
+- `<topic>_newsletter.md` (or the explicit output path)
+
+Internal state:
+
+- `.state/editor/<topic>/<run_id>/candidate.md`
+- `.state/editor/<topic>/<run_id>/checkpoint.json`
+
+The final file is replaced atomically only after the candidate passes the
+newsletter contract. A matching checkpoint is resumed without another model
+request; malformed, truncated, overlong, or unknown-URL output is rejected.
 
 Prompt files:
 
