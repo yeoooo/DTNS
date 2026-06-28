@@ -20,3 +20,10 @@ Markdown contract:
 External boundary contract:
 
 - `discord_delivery.md`: Discord Webhook retry and terminal failure rules.
+
+Internal processing contracts:
+
+- `tagger_batch_processing.md`: adaptive Tagger batching, checkpointing, and
+  resume rules.
+- `tagger_batch_checkpoint.schema.json`: completed Tagger batch checkpoint
+  format.

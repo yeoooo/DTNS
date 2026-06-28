@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/tagger_batch_checkpoint.schema.json",
+  "title": "Tagger Batch Checkpoint",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "input_fingerprint",
+    "policy_fingerprint",
+    "batch_id",
+    "article_ids",
+    "model",
+    "generated_at",
+    "articles"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "run_id": { "type": "string", "minLength": 1 },
+    "input_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "policy_fingerprint": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "batch_id": {
+      "type": "string",
+      "pattern": "^articles-[0-9]{6}-[0-9]{6}$"
+    },
+    "parent_batch_id": {
+      "type": ["string", "null"],
+      "pattern": "^articles-[0-9]{6}-[0-9]{6}$"
+    },
+    "article_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "model": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "articles": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "tags",
+          "technologies",
+          "domains",
+          "ai_metadata"
+        ],
+        "properties": {
+          "id": { "type": "string", "minLength": 1 },
+          "tags": {
+            "type": "array",
+            "maxItems": 6,
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "technologies": {
+            "type": "array",
+            "maxItems": 6,
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "domains": {
+            "type": "array",
+            "maxItems": 4,
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "ai_metadata": {
+            "type": "object",
+            "required": ["model", "confidence"],
+            "properties": {
+              "model": { "type": "string", "minLength": 1 },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "rationale": {
+                "type": ["string", "null"],
+                "maxLength": 160
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
