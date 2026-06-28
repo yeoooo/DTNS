@@ -16,3 +16,7 @@ Schema files:
 Markdown contract:
 
 - `newsletter.md`: editor output expectations.
+
+External boundary contract:
+
+- `discord_delivery.md`: Discord Webhook retry and terminal failure rules.

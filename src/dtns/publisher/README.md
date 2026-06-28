@@ -10,3 +10,4 @@ Rules:
   `DISCORD_WEBHOOK_QA`.
 - Split messages when required by Discord limits.
 - Preserve Markdown content except for safe splitting.
+- Follow `docs/contracts/discord_delivery.md` for HTTP retry behavior.

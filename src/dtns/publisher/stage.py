@@ -7,6 +7,7 @@ Discord Webhook. It is deterministic and does not use AI.
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,8 @@ Topic = Literal["technology", "backend", "qa"]
 
 DISCORD_CONTENT_LIMIT = 2000
 DEFAULT_TIMEOUT_SECONDS = 20.0
+DEFAULT_MAX_ATTEMPTS = 5
+RATE_LIMIT_BUFFER_SECONDS = 0.05
 NEWSLETTER_FILENAME_TEMPLATE = "{topic}_newsletter.md"
 WEBHOOK_ENV_VARS: Mapping[Topic, str] = {
     "technology": "DISCORD_WEBHOOK_TECHNOLOGY",
@@ -55,11 +58,14 @@ def publish_newsletter(
     topic: Topic | None = None,
     webhook_url: str | None = None,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     client: httpx.Client | None = None,
 ) -> PublishResult:
     """Read Markdown from ``input_path`` and publish it to Discord."""
 
     _load_dotenv()
+    if max_attempts <= 0:
+        raise ValueError("Discord publish max_attempts must be positive.")
     input_path = Path(input_path)
     content = input_path.read_text(encoding="utf-8")
     messages = split_discord_messages(content)
@@ -69,7 +75,12 @@ def publish_newsletter(
     http_client = client or httpx.Client(timeout=timeout_seconds)
     try:
         for message in messages:
-            _send_discord_message(http_client, resolved_webhook_url, message)
+            _send_discord_message(
+                http_client,
+                resolved_webhook_url,
+                message,
+                max_attempts=max_attempts,
+            )
     finally:
         if owns_client:
             http_client.close()
@@ -170,19 +181,80 @@ def _send_discord_message(
     client: httpx.Client,
     webhook_url: str,
     content: str,
+    *,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> None:
-    response = client.post(
-        webhook_url,
-        json={
-            "content": content,
-            "allowed_mentions": {"parse": []},
-        },
+    payload = {
+        "content": content,
+        "allowed_mentions": {"parse": []},
+    }
+    last_error: httpx.RequestError | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = client.post(webhook_url, json=payload)
+        except httpx.RequestError as error:
+            last_error = error
+            if attempt == max_attempts:
+                break
+            time.sleep(_exponential_retry_delay(attempt))
+            continue
+
+        if response.status_code < 400:
+            return
+
+        if response.status_code == 429:
+            if attempt == max_attempts:
+                raise _publish_error(response, attempt)
+            time.sleep(_discord_retry_after(response, attempt))
+            continue
+
+        if response.status_code >= 500:
+            if attempt == max_attempts:
+                raise _publish_error(response, attempt)
+            time.sleep(_exponential_retry_delay(attempt))
+            continue
+
+        raise _publish_error(response, attempt)
+
+    raise DiscordPublishError(
+        "Discord Webhook publish failed after "
+        f"{max_attempts} attempts due to a network error: {last_error}"
+    ) from last_error
+
+
+def _discord_retry_after(response: httpx.Response, attempt: int) -> float:
+    retry_after: object | None = None
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            retry_after = payload.get("retry_after")
+    except ValueError:
+        pass
+
+    if retry_after is None:
+        retry_after = response.headers.get("Retry-After")
+
+    try:
+        delay = float(retry_after)
+    except (TypeError, ValueError):
+        return _exponential_retry_delay(attempt)
+
+    if delay < 0:
+        return _exponential_retry_delay(attempt)
+    return delay + RATE_LIMIT_BUFFER_SECONDS
+
+
+def _exponential_retry_delay(attempt: int) -> float:
+    return float(2 ** (attempt - 1))
+
+
+def _publish_error(response: httpx.Response, attempts: int) -> DiscordPublishError:
+    return DiscordPublishError(
+        "Discord Webhook publish failed "
+        f"after {attempts} attempt(s) with HTTP {response.status_code}: "
+        f"{response.text}"
     )
-    if response.status_code >= 400:
-        raise DiscordPublishError(
-            "Discord Webhook publish failed "
-            f"with HTTP {response.status_code}: {response.text}"
-        )
 
 
 def _load_dotenv() -> None:

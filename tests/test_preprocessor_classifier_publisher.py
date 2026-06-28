@@ -4,10 +4,12 @@ import json
 from datetime import UTC, datetime
 
 import pytest
+import httpx
 
 from dtns.classifier import classify_articles
 from dtns.preprocessors import preprocess
-from dtns.publisher import split_discord_messages
+from dtns.publisher import publish_newsletter, split_discord_messages
+from dtns.publisher import stage as publisher_stage
 
 
 def test_preprocess_deduplicates_and_removes_tracking_query(tmp_path):
@@ -100,3 +102,78 @@ def test_split_discord_messages_preserves_content():
 def test_split_discord_messages_rejects_empty_content():
     with pytest.raises(ValueError, match="must not be empty"):
         split_discord_messages("")
+
+
+def test_publisher_retries_discord_rate_limit(monkeypatch, tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    responses = iter(
+        [
+            httpx.Response(429, json={"retry_after": 0.3, "global": False}),
+            httpx.Response(204),
+        ]
+    )
+    requests: list[httpx.Request] = []
+
+    def handler(request):
+        requests.append(request)
+        return next(responses)
+
+    delays: list[float] = []
+    monkeypatch.setattr(publisher_stage.time, "sleep", delays.append)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = publish_newsletter(
+            input_path,
+            webhook_url="https://discord.example/webhook",
+            client=client,
+        )
+
+    assert result.message_count == 1
+    assert len(requests) == 2
+    assert delays == [pytest.approx(0.35)]
+
+
+def test_publisher_does_not_retry_terminal_client_error(monkeypatch, tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    requests: list[httpx.Request] = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(401, json={"message": "invalid webhook"})
+
+    delays: list[float] = []
+    monkeypatch.setattr(publisher_stage.time, "sleep", delays.append)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(publisher_stage.DiscordPublishError, match="HTTP 401"):
+            publish_newsletter(
+                input_path,
+                webhook_url="https://discord.example/webhook",
+                client=client,
+            )
+
+    assert len(requests) == 1
+    assert delays == []
+
+
+def test_publisher_retries_transient_server_error(monkeypatch, tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+    responses = iter([httpx.Response(503), httpx.Response(204)])
+
+    def handler(request):
+        return next(responses)
+
+    delays: list[float] = []
+    monkeypatch.setattr(publisher_stage.time, "sleep", delays.append)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        publish_newsletter(
+            input_path,
+            webhook_url="https://discord.example/webhook",
+            client=client,
+        )
+
+    assert delays == [1.0]
