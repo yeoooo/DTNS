@@ -18,8 +18,16 @@ from dtns.agents.execution_state import AIExecutionState, AIExecutionStateStore
 
 DEFAULT_FALLBACK_MODEL = "gemini-3.1-flash-lite"
 FALLBACK_MODEL_ENV_VAR = "GEMINI_FALLBACK_MODEL"
+
 RETRYABLE_STATUS_CODES = {429, *range(500, 600)}
 MAX_ATTEMPTS_PER_MODEL = 2
+
+# Gemini free tier protection:
+# 15 RPM => 1 request / 4s.
+# Use 5s to leave some safety margin.
+MIN_REQUEST_INTERVAL_SECONDS = 5.0
+_last_request_at = 0.0
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,12 +66,13 @@ def generate_content_with_fallback(
 
     fallback_model = fallback_model or resolve_fallback_model()
     canonical_primary_model = policy_primary_model or primary_model
+
     state_store: AIExecutionStateStore | None = None
     state: AIExecutionState | None = None
+
     if (run_id is None) != (execution_state_path is None):
-        raise ValueError(
-            "run_id and execution_state_path must be supplied together"
-        )
+        raise ValueError("run_id and execution_state_path must be supplied together")
+
     if run_id is not None and execution_state_path is not None:
         state_store = AIExecutionStateStore(
             execution_state_path,
@@ -86,6 +95,7 @@ def generate_content_with_fallback(
             else canonical_primary_model
         )
     )
+
     models = [preferred_model]
     if (
         preferred_model == canonical_primary_model
@@ -102,20 +112,26 @@ def generate_content_with_fallback(
 
     last_error: Exception | None = None
     primary_exhausted = False
+
     try:
         for model in models:
             for attempt in range(1, MAX_ATTEMPTS_PER_MODEL + 1):
                 try:
+                    _throttle_gemini_request()
+
                     response = client.models.generate_content(
                         model=model,
                         contents=contents,
                         config=config,
                     )
+
                 except Exception as error:
                     if not is_retryable_api_error(error):
                         _record_observed_outcome(state_store, state)
                         raise
+
                     last_error = error
+
                     if state_store is not None and state is not None:
                         state = state.model_copy(
                             update={
@@ -125,16 +141,21 @@ def generate_content_with_fallback(
                             }
                         )
                         state_store.save(state)
+
                     logger.warning(
                         "Gemini model %s returned a transient error "
-                        "(attempt %d/%d).",
+                        "(attempt %d/%d): %r",
                         model,
                         attempt,
                         MAX_ATTEMPTS_PER_MODEL,
+                        error,
                     )
+
                     if attempt < MAX_ATTEMPTS_PER_MODEL:
-                        time.sleep(2**attempt)
+                        time.sleep((2**attempt) * 3)
+
                     continue
+
                 accept_callback = None
                 if state_store is not None and state is not None:
                     accept_callback = _accepted_outcome_callback(
@@ -144,15 +165,19 @@ def generate_content_with_fallback(
                         fallback_model=fallback_model,
                         primary_exhausted=primary_exhausted,
                     )
+
                 return GenerationResult(
                     response=response,
                     model=model,
                     _accept_callback=accept_callback,
                 )
+
             if model == canonical_primary_model:
                 primary_exhausted = True
+
             if model != models[-1]:
                 logger.warning("Falling back from %s to %s.", model, models[-1])
+
     finally:
         if owns_client:
             client.close()
@@ -160,6 +185,21 @@ def generate_content_with_fallback(
     raise RuntimeError(
         "Gemini primary and fallback models failed after transient API errors."
     ) from last_error
+
+
+def _throttle_gemini_request() -> None:
+    """Ensure Gemini API requests are spaced out to avoid free-tier RPM limits."""
+
+    global _last_request_at
+
+    now = time.monotonic()
+    elapsed = now - _last_request_at
+    wait_seconds = MIN_REQUEST_INTERVAL_SECONDS - elapsed
+
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
+
+    _last_request_at = time.monotonic()
 
 
 def resolve_fallback_model() -> str:
@@ -177,7 +217,9 @@ def generation_policy_fingerprint(
         "fallback_model": fallback_model or resolve_fallback_model(),
         "max_attempts_per_model": MAX_ATTEMPTS_PER_MODEL,
         "retryable_status_codes": sorted(RETRYABLE_STATUS_CODES),
+        "min_request_interval_seconds": MIN_REQUEST_INTERVAL_SECONDS,
     }
+
     return hashlib.sha256(
         json.dumps(policy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -189,6 +231,7 @@ def _record_observed_outcome(
 ) -> None:
     if store is None or state is None:
         return
+
     store.save(state.model_copy(update={"updated_at": datetime.now(UTC)}))
 
 
@@ -202,11 +245,13 @@ def _accepted_outcome_callback(
 ) -> Callable[[], None]:
     def accept() -> None:
         now = datetime.now(UTC)
+
         update = {
             "updated_at": now,
             "fallback_successes": state.fallback_successes
             + int(model == fallback_model),
         }
+
         if model == fallback_model and primary_exhausted:
             update.update(
                 circuit_state="open",
@@ -214,6 +259,7 @@ def _accepted_outcome_callback(
                 opened_at=now,
                 open_reason="transient_api_exhausted",
             )
+
         store.save(AIExecutionState.model_validate(state.model_copy(update=update)))
 
     return accept
@@ -225,10 +271,12 @@ def is_retryable_api_error(error: Exception) -> bool:
         getattr(error, "status_code", None),
         getattr(getattr(error, "response", None), "status_code", None),
     )
+
     for code in status_codes:
         try:
             if int(code) in RETRYABLE_STATUS_CODES:
                 return True
         except (TypeError, ValueError):
             continue
+
     return False
