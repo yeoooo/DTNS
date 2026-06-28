@@ -6,8 +6,6 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
-
 from dtns.agents.editor import runner
 from dtns.agents.editor.runner import (
     normalize_markdown,
@@ -129,6 +127,38 @@ def test_validate_markdown_parses_link_destination_and_optional_title():
         )
 
 
+@pytest.mark.parametrize(
+    "link",
+    [
+        "[링크](HTTPS://evil.example)",
+        "HTTPS://evil.example",
+    ],
+)
+def test_validate_markdown_rejects_unknown_uppercase_scheme_url(link):
+    with pytest.raises(ValueError, match="unknown article URLs"):
+        validate_markdown(
+            VALID_MARKDOWN + f"\n{link}",
+            known_urls={"https://known.example"},
+        )
+
+
+def test_validate_markdown_matches_scheme_and_host_case_insensitively():
+    assert validate_markdown(
+        VALID_MARKDOWN + "\n[링크](HTTPS://KNOWN.EXAMPLE/CaseSensitivePath)",
+        known_urls={"https://known.example/CaseSensitivePath"},
+    )
+
+
+@pytest.mark.parametrize("suffix", ["?", "!", ";"])
+def test_validate_markdown_preserves_valid_bare_url_terminal_punctuation(suffix):
+    allowed = f"https://known.example/article{suffix}"
+
+    assert validate_markdown(
+        VALID_MARKDOWN + f"\n{allowed}",
+        known_urls={allowed},
+    )
+
+
 def test_validate_markdown_rejects_english_body_with_korean_headings():
     markdown = """# 🗞️ 이번 주 Technology 뉴스레터
 
@@ -153,8 +183,159 @@ def test_editor_rejects_more_than_eight_trends(tmp_path):
     input_path = tmp_path / "technology_trends.json"
     _write_trends(input_path, count=9)
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError, match="Invalid TrendsFile artifact"):
         write_newsletter(input_path, tmp_path / "technology_newsletter.md")
+
+
+def test_editor_validates_trends_from_original_json_bytes(tmp_path):
+    input_path = tmp_path / "technology_trends.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "topic": "technology",
+                "period": {"start": "2026-06-18", "end": "2026-06-25"},
+                "trends": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    markdown = write_newsletter(
+        input_path,
+        tmp_path / "technology_newsletter.md",
+    )
+
+    assert "Technology Trends 뉴스레터" in markdown
+
+
+def test_editor_validates_topic_articles_from_original_json_bytes(tmp_path):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    _write_trends(trends_path, count=0)
+    articles_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "topic": "technology",
+                "articles": [
+                    {
+                        "id": "article-1",
+                        "source": "example",
+                        "title": "Example",
+                        "canonical_url": "https://example.com/article",
+                        "published_at": "2026-06-24T12:00:00Z",
+                        "tags": [],
+                        "technologies": [],
+                        "domains": [],
+                        "ai_metadata": {"model": "test-model", "confidence": 1.0},
+                        "classification": {"matched_rules": []},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    markdown = write_newsletter(
+        trends_path,
+        tmp_path / "technology_newsletter.md",
+        articles_path=articles_path,
+    )
+
+    assert "Technology Trends 뉴스레터" in markdown
+
+
+@pytest.mark.parametrize(
+    ("invalid_fields", "failed_field"),
+    [
+        ({"generated_at": "not-a-datetime"}, "generated_at"),
+        (
+            {"period": {"start": "2026-99-99", "end": "2026-06-25"}},
+            "period.start",
+        ),
+    ],
+)
+def test_editor_rejects_malformed_trend_temporal_fields(
+    tmp_path,
+    invalid_fields,
+    failed_field,
+):
+    input_path = tmp_path / "technology_trends.json"
+    payload = {
+        "schema_version": "1.0",
+        "generated_at": "2026-06-25T00:00:00Z",
+        "topic": "technology",
+        "trends": [],
+        **invalid_fields,
+    }
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=failed_field):
+        write_newsletter(input_path, tmp_path / "technology_newsletter.md")
+
+
+def test_editor_rejects_unexpected_trends_field(tmp_path):
+    input_path = tmp_path / "technology_trends.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "topic": "technology",
+                "trends": [],
+                "unexpected": "must not be accepted",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unexpected"):
+        write_newsletter(input_path, tmp_path / "technology_newsletter.md")
+
+
+def test_editor_rejects_invalid_topic_literal(tmp_path):
+    input_path = tmp_path / "technology_trends.json"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "topic": "security",
+                "trends": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="topic"):
+        write_newsletter(input_path, tmp_path / "technology_newsletter.md")
+
+
+def test_editor_checks_topic_mismatch_after_topic_articles_validation(tmp_path):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "backend_articles.json"
+    _write_trends(trends_path, count=0)
+    articles_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "topic": "backend",
+                "articles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="does not match trends topic"):
+        write_newsletter(
+            trends_path,
+            tmp_path / "technology_newsletter.md",
+            articles_path=articles_path,
+        )
 
 
 def test_editor_retries_truncation_then_uses_fallback(tmp_path, monkeypatch):

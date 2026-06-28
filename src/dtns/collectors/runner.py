@@ -35,6 +35,7 @@ from dtns.contracts.collection_report import (
 
 DEFAULT_ARTICLES_FILENAME = "articles.json"
 COLLECTION_REPORT_FILENAME = "collection_report.json"
+COLLECTOR_POLICY_VERSION = "1"
 logger = logging.getLogger(__name__)
 
 
@@ -362,6 +363,42 @@ def _source_config_fingerprint(
         }
         for source in sources
     ]
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def collector_policy_fingerprint(
+    *,
+    feed_sources: tuple[FeedSource, ...] | None = None,
+    github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    limit_per_source: int | None = None,
+    timeout_seconds: float = 20.0,
+) -> str:
+    """Return the deterministic Collector configuration identity."""
+
+    resolved_feeds = (
+        default_feed_sources() if feed_sources is None else feed_sources
+    )
+    resolved_releases = (
+        default_github_release_sources()
+        if github_release_sources is None
+        else github_release_sources
+    )
+    payload = {
+        "policy_version": COLLECTOR_POLICY_VERSION,
+        "source_config_fingerprint": _source_config_fingerprint(
+            [*resolved_feeds, *resolved_releases]
+        ),
+        "limit_per_source": limit_per_source,
+        "timeout_seconds": timeout_seconds,
+        "output_schema": RawArticlesDocument.model_json_schema(),
+        "report_schema": CollectionReport.model_json_schema(),
+    }
     canonical = json.dumps(
         payload,
         ensure_ascii=False,

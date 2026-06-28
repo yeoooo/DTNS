@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+import hashlib
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+
 from dtns import cli
+from dtns.publisher.receipt import (
+    PublishChunkReceipt,
+    PublishReceipt,
+    write_publish_receipt,
+)
+from dtns.publisher.stage import split_discord_messages
 
 
 def test_run_all_executes_complete_pipeline_in_order(monkeypatch, tmp_path):
@@ -113,3 +124,183 @@ def test_run_all_passes_explicit_run_id_to_every_ai_stage(monkeypatch, tmp_path)
     ) == 0
     assert observed
     assert {run_id for _, run_id in observed} == {"shared-run"}
+
+
+def test_validate_trends_accepts_strict_json_dates(tmp_path):
+    path = tmp_path / "technology_trends.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-29T00:00:00Z",
+                "topic": "technology",
+                "period": {"start": "2026-06-23", "end": "2026-06-29"},
+                "trends": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cli._validate_trends([path], "technology")
+
+
+def test_pipeline_validator_sanitizes_pydantic_input_values(tmp_path):
+    path = tmp_path / "technology_trends.json"
+    secret_webhook = "https://discord.com/api/webhooks/123/secret-token"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "invalid",
+                "generated_at": "not-a-datetime",
+                "topic": "technology",
+                "trends": [],
+                "webhook_url": secret_webhook,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError) as captured:
+        cli._validate_trends([path], "technology")
+
+    message = str(captured.value)
+    assert str(path) in message
+    assert "TrendsFile" in message
+    assert "generated_at" in message
+    assert secret_webhook not in message
+    assert "secret-token" not in message
+    assert captured.value.__cause__ is None
+
+
+def test_ai_configuration_uses_complete_agent_policy_fingerprint(
+    monkeypatch, tmp_path
+):
+    from dtns.agents.tagger import stage
+
+    prompt = tmp_path / "tagger.md"
+    prompt.write_text("first policy", encoding="utf-8")
+    monkeypatch.setattr(stage, "PROMPT_PATH", prompt)
+    first = cli._ai_configuration("TAGGER")
+
+    prompt.write_text("changed policy", encoding="utf-8")
+    second = cli._ai_configuration("TAGGER")
+
+    assert set(first) == {"topic", "policy_fingerprint"}
+    assert first["policy_fingerprint"] != second["policy_fingerprint"]
+
+
+def test_deterministic_stage_configurations_track_rules(monkeypatch):
+    from dtns.classifier import stage as classifier
+    from dtns.collectors import runner as collector
+    from dtns.collectors.sources import FeedSource
+    from dtns.preprocessors import stage as preprocessor
+
+    collector_before = cli._collector_configuration(10)
+    original_sources = collector.default_feed_sources()
+    monkeypatch.setattr(
+        collector,
+        "default_feed_sources",
+        lambda: (*original_sources, FeedSource("New", "https://example.com/feed")),
+    )
+    assert cli._collector_configuration(10) != collector_before
+
+    preprocessor_before = cli._preprocessor_configuration()
+    monkeypatch.setattr(
+        preprocessor,
+        "TRACKING_QUERY_KEYS",
+        {*preprocessor.TRACKING_QUERY_KEYS, "new_tracking_key"},
+    )
+    assert cli._preprocessor_configuration() != preprocessor_before
+
+    classifier_before = cli._classifier_configuration()
+    monkeypatch.setitem(
+        classifier.TERM_RULES,
+        "technology",
+        {*classifier.TERM_RULES["technology"], "new technology term"},
+    )
+    assert cli._classifier_configuration() != classifier_before
+
+
+@pytest.mark.parametrize(
+    "render",
+    [
+        lambda markdown: f"---\nlayout: newsletter\n---\n{markdown}",
+        lambda markdown: f"```markdown\n{markdown}\n```",
+        lambda markdown: '{"newsletter": true}',
+        lambda markdown: markdown.replace("\n\n", "\n\n---\n\n", 1),
+        lambda markdown: markdown.replace(
+            "## 📌 주요 트렌드", "#### 📌 주요 트렌드"
+        ),
+    ],
+)
+def test_newsletter_revalidation_rejects_forbidden_or_unnormalized_markdown(
+    tmp_path, render
+):
+    from dtns.agents.editor.runner import _empty_newsletter
+
+    articles_path = tmp_path / "technology_articles.json"
+    newsletter_path = tmp_path / "technology_newsletter.md"
+    articles_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-29T00:00:00Z",
+                "topic": "technology",
+                "articles": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    newsletter_path.write_text(
+        render(_empty_newsletter("technology")),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError):
+        cli._validate_newsletter([newsletter_path], articles_path)
+
+
+def test_publish_receipt_requires_matching_identity_and_chunks(monkeypatch, tmp_path):
+    webhook = "https://discord.com/api/webhooks/1/token"
+    monkeypatch.setenv("DISCORD_WEBHOOK_TECHNOLOGY", webhook)
+    newsletter = tmp_path / "technology_newsletter.md"
+    newsletter.write_text("# newsletter", encoding="utf-8")
+    message = split_discord_messages("# newsletter")[0]
+    newsletter_fingerprint = hashlib.sha256(newsletter.read_bytes()).hexdigest()
+    webhook_fingerprint = cli._publisher_configuration("technology")[
+        "webhook_fingerprint"
+    ]
+    receipt_path = tmp_path / "receipt.json"
+
+    receipt = PublishReceipt(
+        run_id="run-1",
+        topic="backend",
+        newsletter_fingerprint=newsletter_fingerprint,
+        webhook_fingerprint=webhook_fingerprint,
+        status="completed",
+        chunks=[
+            PublishChunkReceipt(
+                index=0,
+                fingerprint=hashlib.sha256(message.encode()).hexdigest(),
+                character_count=len(message),
+                status="delivered",
+                delivered_at=datetime.now(UTC),
+            )
+        ],
+        updated_at=datetime.now(UTC),
+    )
+    write_publish_receipt(receipt_path, receipt)
+    assert not cli._publish_receipt_matches(
+        receipt_path, "technology", newsletter
+    )
+
+    receipt.topic = "technology"
+    receipt.chunks[0].fingerprint = "0" * 64
+    write_publish_receipt(receipt_path, receipt)
+    assert not cli._publish_receipt_matches(
+        receipt_path, "technology", newsletter
+    )
+
+    receipt.chunks[0].fingerprint = hashlib.sha256(message.encode()).hexdigest()
+    write_publish_receipt(receipt_path, receipt)
+    assert cli._publish_receipt_matches(receipt_path, "technology", newsletter)

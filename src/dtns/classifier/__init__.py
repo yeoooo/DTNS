@@ -11,6 +11,7 @@ from dtns.classifier.stage import (
     classify_article_for_topic,
     classify_articles,
     classify_tagged_articles,
+    classifier_policy_fingerprint,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "classify_article_for_topic",
     "classify_articles",
     "classify_tagged_articles",
+    "classifier_policy_fingerprint",
 ]

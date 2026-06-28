@@ -23,6 +23,8 @@ External boundary contract:
 
 Internal processing contracts:
 
+- `json_artifact_validation.md`: strict Pydantic validation rules for JSON
+  artifacts, temporal fields, and pipeline output checks.
 - `tagger_batch_processing.md`: adaptive Tagger batching, checkpointing, and
   resume rules.
 - `tagger_batch_checkpoint.schema.json`: completed Tagger batch checkpoint

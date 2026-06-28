@@ -18,7 +18,16 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    AnyUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from dtns.agents.editor.checkpoint import EditorGenerationCheckpoint
 from dtns.agents.execution_state import execution_state_path
@@ -26,6 +35,7 @@ from dtns.agents.gemini import (
     DEFAULT_FALLBACK_MODEL,
     GenerationResult,
     generate_content_with_fallback,
+    generation_policy_fingerprint,
     resolve_fallback_model,
 )
 
@@ -54,7 +64,7 @@ HANGUL_RE = re.compile(r"[가-힣]")
 LATIN_RE = re.compile(r"[A-Za-z]")
 ATX_HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
 BOLD_LABEL_RE = re.compile(r"^\s*\*\*[^*]+\*\*\s*$", re.MULTILINE)
-URL_START_RE = re.compile(r"https?://")
+URL_START_RE = re.compile(r"https?://", re.IGNORECASE)
 FRONT_MATTER_RE = re.compile(r"\A\s*---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 SECTION_PATTERNS = {
     "title": re.compile(r"^#\s+\S+", re.MULTILINE),
@@ -62,17 +72,18 @@ SECTION_PATTERNS = {
     "trends": re.compile(r"^##\s+.*주요\s*트렌드\s*$", re.MULTILINE),
     "insights": re.compile(r"^##\s+.*이번\s*주\s*인사이트\s*$", re.MULTILINE),
 }
+URL_ADAPTER = TypeAdapter(AnyUrl)
 
 
 class TrendPeriod(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     start: date
     end: date
 
 
 class Trend(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str
     title: str
@@ -89,9 +100,16 @@ class Trend(BaseModel):
             raise ValueError("must not be empty")
         return value
 
+    @field_validator("keywords")
+    @classmethod
+    def require_unique_keywords(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("keywords must be unique")
+        return value
+
 
 class TrendsFile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal["1.0"]
     generated_at: datetime
@@ -106,24 +124,49 @@ class TrendsFile(BaseModel):
             raise ValueError("must not be empty")
         return value
 
+    @field_validator("generated_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone(value, "generated_at")
+
+    @model_validator(mode="after")
+    def reject_null_period(self) -> TrendsFile:
+        if "period" in self.model_fields_set and self.period is None:
+            raise ValueError("period must be omitted instead of null")
+        return self
+
 
 class AIMetadata(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     model: str
     confidence: float = Field(ge=0, le=1)
     rationale: str | None = None
 
+    @field_validator("rationale", mode="before")
+    @classmethod
+    def reject_null_rationale(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("rationale must be omitted instead of null")
+        return value
+
 
 class ClassificationMetadata(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     matched_rules: list[str] = Field(default_factory=list)
     score: float | None = Field(default=None, ge=0)
 
+    @field_validator("score", mode="before")
+    @classmethod
+    def reject_null_score(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("score must be omitted instead of null")
+        return value
+
 
 class TopicArticle(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     id: str
     source: str
@@ -144,9 +187,36 @@ class TopicArticle(BaseModel):
             raise ValueError("must not be empty")
         return value
 
+    @field_validator("canonical_url")
+    @classmethod
+    def require_uri(cls, value: str) -> str:
+        URL_ADAPTER.validate_python(value)
+        return value
+
+    @field_validator("tags", "technologies", "domains")
+    @classmethod
+    def require_unique_values(cls, value: list[str]) -> list[str]:
+        if len(value) != len(set(value)):
+            raise ValueError("values must be unique")
+        return value
+
+    @field_validator("published_at")
+    @classmethod
+    def require_published_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None:
+            _require_timezone(value, "published_at")
+        return value
+
+    @field_validator("summary", mode="before")
+    @classmethod
+    def reject_null_summary(cls, value: Any) -> Any:
+        if value is None:
+            raise ValueError("summary must be omitted instead of null")
+        return value
+
 
 class TopicArticlesFile(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal["1.0"]
     generated_at: datetime
@@ -160,9 +230,20 @@ class TopicArticlesFile(BaseModel):
             raise ValueError("must not be empty")
         return value
 
+    @field_validator("generated_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone(value, "generated_at")
+
 
 class EditorContentError(ValueError):
     """A recoverable model-content failure."""
+
+
+def _require_timezone(value: datetime, field_name: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a timezone offset")
+    return value
 
 
 def write_newsletter(
@@ -184,13 +265,25 @@ def write_newsletter(
     model = resolve_model(model)
 
     input_bytes = input_path.read_bytes()
-    trends_file = TrendsFile.model_validate(_read_json(input_path))
-    topic_articles = _load_topic_articles(articles_path, trends_file.topic)
+    trends_file = _validate_json_artifact(
+        TrendsFile,
+        input_path,
+        input_bytes,
+        contract_name="TrendsFile",
+    )
+    articles_bytes = b""
+    if articles_path is None:
+        topic_articles = []
+    else:
+        articles_path = Path(articles_path)
+        articles_bytes = articles_path.read_bytes()
+        topic_articles = _load_topic_articles(
+            articles_path,
+            articles_bytes,
+            trends_file.topic,
+        )
     _validate_article_references(trends_file, topic_articles)
 
-    articles_bytes = (
-        Path(articles_path).read_bytes() if articles_path is not None else b""
-    )
     input_fingerprint = _fingerprint(input_bytes + b"\0" + articles_bytes)
     fallback_model = resolve_fallback_model()
     policy_fingerprint = _policy_fingerprint(
@@ -362,7 +455,14 @@ def validate_markdown(markdown: str, *, known_urls: set[str]) -> str:
             "Editor Markdown is missing required sections: " + ", ".join(missing)
         )
     output_urls = _extract_article_urls(markdown)
-    unknown_urls = sorted(output_urls - known_urls)
+    normalized_known_urls = {
+        _normalize_url_for_allowlist(url) for url in known_urls
+    }
+    unknown_urls = sorted(
+        url
+        for url in output_urls
+        if _normalize_url_for_allowlist(url) not in normalized_known_urls
+    )
     if unknown_urls:
         raise ValueError(
             "Editor Markdown contains unknown article URLs: "
@@ -397,7 +497,7 @@ def _parse_inline_link_destinations(
             cursor = opener + 2
             continue
         destination, end = parsed
-        if destination.startswith(("http://", "https://")):
+        if destination.casefold().startswith(("http://", "https://")):
             destinations.append(destination)
         ranges.append((opener, end))
         cursor = end
@@ -488,6 +588,44 @@ def _unescape_markdown(value: str) -> str:
     return html.unescape(unescaped)
 
 
+def _normalize_url_for_allowlist(url: str) -> str:
+    """Normalize URL components whose syntax is case-insensitive."""
+
+    match = re.match(
+        r"^(?P<scheme>https?)://(?P<authority>[^/?#]*)(?P<rest>.*)$",
+        url,
+        re.IGNORECASE,
+    )
+    if match is None:
+        return url
+    authority = match.group("authority")
+    userinfo, separator, host_port = authority.rpartition("@")
+    if not separator:
+        userinfo = ""
+        host_port = authority
+    if host_port.startswith("[") and "]" in host_port:
+        closing = host_port.index("]")
+        normalized_host_port = (
+            host_port[: closing + 1].casefold() + host_port[closing + 1 :]
+        )
+    else:
+        host, port_separator, port = host_port.rpartition(":")
+        normalized_host_port = (
+            f"{host.casefold()}:{port}"
+            if port_separator and port.isdigit()
+            else host_port.casefold()
+        )
+    normalized_authority = (
+        f"{userinfo}@{normalized_host_port}"
+        if separator
+        else normalized_host_port
+    )
+    return (
+        f"{match.group('scheme').casefold()}://"
+        f"{normalized_authority}{match.group('rest')}"
+    )
+
+
 def _parse_bare_urls(markdown: str) -> list[str]:
     urls: list[str] = []
     search_start = 0
@@ -505,7 +643,7 @@ def _parse_bare_urls(markdown: str) -> list[str]:
                     break
                 depth -= 1
             cursor += 1
-        url = markdown[match.start():cursor].rstrip(".,;:!?")
+        url = markdown[match.start():cursor].rstrip(".,:")
         if url:
             urls.append(url)
         search_start = max(cursor, match.end())
@@ -515,7 +653,7 @@ def _parse_bare_urls(markdown: str) -> list[str]:
 def _validate_korean_body(markdown: str) -> None:
     body = ATX_HEADING_RE.sub("", markdown)
     body = BOLD_LABEL_RE.sub("", body)
-    body = re.sub(r"https?://\S+", "", body)
+    body = re.sub(r"https?://\S+", "", body, flags=re.IGNORECASE)
     hangul_count = len(HANGUL_RE.findall(body))
     latin_count = len(LATIN_RE.findall(body))
     language_characters = hangul_count + latin_count
@@ -731,19 +869,42 @@ def _load_topic_prompt(topic: str) -> str | None:
 
 
 def _load_topic_articles(
-    articles_path: Path | str | None,
+    articles_path: Path,
+    articles_bytes: bytes,
     expected_topic: str,
 ) -> list[TopicArticle]:
-    if articles_path is None:
-        return []
-
-    document = TopicArticlesFile.model_validate(_read_json(Path(articles_path)))
+    document = _validate_json_artifact(
+        TopicArticlesFile,
+        articles_path,
+        articles_bytes,
+        contract_name="TopicArticlesFile",
+    )
     if document.topic != expected_topic:
         raise ValueError(
             f"articles topic '{document.topic}' does not match trends topic "
             f"'{expected_topic}'"
         )
     return document.articles
+
+
+def _validate_json_artifact(
+    model: type[BaseModel],
+    path: Path,
+    artifact_bytes: bytes,
+    *,
+    contract_name: str,
+) -> Any:
+    try:
+        return model.model_validate_json(artifact_bytes)
+    except ValidationError as error:
+        failures = "; ".join(
+            f"{'.'.join(str(part) for part in failure['loc']) or '<root>'}: "
+            f"{failure['msg']}"
+            for failure in error.errors(include_input=False, include_url=False)
+        )
+        raise ValueError(
+            f"Invalid {contract_name} artifact at {path}: {failures}"
+        ) from None
 
 
 def _validate_article_references(
@@ -841,14 +1002,19 @@ def _load_valid_candidate(
 def _policy_fingerprint(
     *, topic: str, model: str, fallback_model: str | None
 ) -> str:
+    resolved_fallback = fallback_model or DEFAULT_FALLBACK_MODEL
     policy = {
         "checkpoint_schema_version": SCHEMA_VERSION,
         "validation_version": "2",
         "prompt": _build_system_prompt(topic),
         "models": {
             "primary": model,
-            "fallback": fallback_model or DEFAULT_FALLBACK_MODEL,
+            "fallback": resolved_fallback,
         },
+        "execution_policy_fingerprint": generation_policy_fingerprint(
+            primary_model=model,
+            fallback_model=resolved_fallback,
+        ),
         "limits": {
             "trends": MAX_TRENDS,
             "characters": MAX_CHARACTERS,
@@ -862,6 +1028,21 @@ def _policy_fingerprint(
     }
     return _fingerprint(
         json.dumps(policy, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    )
+
+
+def editor_policy_fingerprint(
+    topic: str,
+    *,
+    model: str | None = None,
+    fallback_model: str | None = None,
+) -> str:
+    """Return the complete topic-specific Editor policy identity."""
+
+    return _policy_fingerprint(
+        topic=topic,
+        model=resolve_model(model),
+        fallback_model=fallback_model or resolve_fallback_model(),
     )
 
 
@@ -914,15 +1095,6 @@ def _fsync_directory(directory: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Invalid JSON in {path}") from error
-    except ValidationError:
-        raise
 
 
 def _load_dotenv() -> None:

@@ -160,6 +160,9 @@ schema limits must remain active even when model token limits increase.
 - Require unique final trend IDs.
 - Validate every final article reference against the original input.
 - Write the topic trends file atomically only after complete validation.
+- Pipeline and Editor consumers must validate the persisted output from its
+  original JSON bytes according to `json_artifact_validation.md`. They must not
+  pass a `json.loads` result to a strict `TrendsFile.model_validate` call.
 - Do not replace an existing valid final output when the new run fails.
 
 ## Failure Contract

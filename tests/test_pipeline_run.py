@@ -28,6 +28,7 @@ def test_pipeline_manifest_resumes_and_invalidates_dependents(tmp_path):
             preprocess,
             (source,),
             lambda: (normalized,),
+            dependencies=("collect",),
         ),
     ]
 
@@ -55,3 +56,59 @@ def test_pipeline_manifest_resumes_and_invalidates_dependents(tmp_path):
         .read_text(encoding="utf-8")
     )
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(payload)
+
+
+def test_pipeline_invalidates_only_topic_dependents(tmp_path):
+    classified = tmp_path / "classified.json"
+    technology_trends = tmp_path / "technology_trends.json"
+    technology_newsletter = tmp_path / "technology_newsletter.md"
+    backend_trends = tmp_path / "backend_trends.json"
+    calls: list[str] = []
+
+    def action(name, path, content):
+        def run():
+            calls.append(name)
+            path.write_text(content, encoding="utf-8")
+
+        return run
+
+    stages = [
+        PipelineStage(
+            "classify",
+            action("classify", classified, "classified"),
+            (),
+            lambda: (classified,),
+        ),
+        PipelineStage(
+            "trend:technology",
+            action("trend:technology", technology_trends, "technology"),
+            (classified,),
+            lambda: (technology_trends,),
+            dependencies=("classify",),
+        ),
+        PipelineStage(
+            "edit:technology",
+            action("edit:technology", technology_newsletter, "newsletter"),
+            (technology_trends,),
+            lambda: (technology_newsletter,),
+            dependencies=("trend:technology",),
+        ),
+        PipelineStage(
+            "trend:backend",
+            action("trend:backend", backend_trends, "backend"),
+            (classified,),
+            lambda: (backend_trends,),
+            dependencies=("classify",),
+        ),
+    ]
+    run_pipeline(tmp_path, "topic-run", stages)
+    calls.clear()
+    technology_trends.write_text("invalid", encoding="utf-8")
+
+    resumed = run_pipeline(tmp_path, "topic-run", stages)
+
+    assert calls == ["trend:technology", "edit:technology"]
+    attempts = {stage.stage_id: stage.attempts for stage in resumed.stages}
+    assert attempts["trend:technology"] == 2
+    assert attempts["edit:technology"] == 2
+    assert attempts["trend:backend"] == 1

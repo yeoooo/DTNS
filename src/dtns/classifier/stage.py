@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from dtns.contracts.tagged_articles import (
     AIMetadata,
@@ -21,6 +22,7 @@ from dtns.contracts.tagged_articles import (
 TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
 TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
 TOPICS = ("technology", "backend", "qa")
+CLASSIFIER_POLICY_VERSION = "1"
 
 Topic = Literal["technology", "backend", "qa"]
 
@@ -86,6 +88,10 @@ TERM_RULES: dict[Topic, set[str]] = {
 }
 
 
+class ArtifactValidationError(ValueError):
+    """A sanitized persisted-artifact contract validation failure."""
+
+
 class ClassificationMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -133,7 +139,18 @@ def classify_articles(
 
     input_path = Path(input_path)
     output_dir = Path(output_dir)
-    tagged_document = TaggedArticlesDocument.model_validate(_read_json(input_path))
+    try:
+        tagged_document = TaggedArticlesDocument.model_validate_json(
+            input_path.read_bytes()
+        )
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Input file not found: {input_path}") from None
+    except ValidationError as error:
+        raise _artifact_validation_error(
+            input_path,
+            contract_name=TaggedArticlesDocument.__name__,
+            error=error,
+        ) from None
     classified = classify_tagged_articles(tagged_document.articles)
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -229,19 +246,72 @@ def _article_terms(article: TaggedArticle) -> set[str]:
     return terms
 
 
-def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Invalid JSON in {path}") from error
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Input file not found: {path}") from None
+def classifier_policy_fingerprint() -> str:
+    """Return the deterministic classification rule and contract identity."""
+
+    policy = {
+        "policy_version": CLASSIFIER_POLICY_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "topics": list(TOPICS),
+        "term_rules": {
+            topic: sorted(TERM_RULES[topic]) for topic in TOPICS
+        },
+        "matching": {
+            "normalization": "casefold-exact-term",
+            "multi_label": True,
+            "score": "matched-rule-count",
+        },
+        "input_schema": TaggedArticlesDocument.model_json_schema(),
+        "output_schema": TopicArticlesDocument.model_json_schema(),
+    }
+    encoded = json.dumps(
+        policy,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _artifact_validation_error(
+    path: Path,
+    *,
+    contract_name: str,
+    error: ValidationError,
+) -> ArtifactValidationError:
+    failures = []
+    for detail in error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
+        location = _format_error_location(detail["loc"])
+        failures.append(f"{location} ({detail['type']})")
+
+    joined_failures = ", ".join(failures) or "<document> (validation_error)"
+    return ArtifactValidationError(
+        f"Artifact validation failed: path={path}; contract={contract_name}; "
+        f"fields={joined_failures}"
+    )
+
+
+def _format_error_location(location: tuple[int | str, ...]) -> str:
+    formatted = ""
+    for part in location:
+        if isinstance(part, int):
+            formatted += f"[{part}]"
+        elif formatted:
+            formatted += f".{part}"
+        else:
+            formatted = part
+    return formatted or "<document>"
 
 
 __all__ = [
     "TAGGED_ARTICLES_FILENAME",
     "TOPIC_ARTICLES_FILENAME_TEMPLATE",
     "TOPICS",
+    "ArtifactValidationError",
     "ClassificationMetadata",
     "Topic",
     "TopicArticle",
@@ -249,4 +319,5 @@ __all__ = [
     "classify_article_for_topic",
     "classify_articles",
     "classify_tagged_articles",
+    "classifier_policy_fingerprint",
 ]

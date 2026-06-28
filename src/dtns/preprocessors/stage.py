@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 ARTICLES_FILENAME = "articles.json"
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
 SCHEMA_VERSION = "1.0"
+PREPROCESSOR_POLICY_VERSION = "1"
 
 SourceType = Literal["rss", "atom", "github_release", "api", "html"]
 
@@ -42,6 +43,10 @@ TRACKING_QUERY_KEYS = {
 IGNORED_QUERY_PREFIXES = ("utm_",)
 HTTP_SCHEMES = {"http", "https"}
 WHITESPACE_RE = re.compile(r"\s+")
+
+
+class ArtifactValidationError(ValueError):
+    """A sanitized persisted-artifact contract validation failure."""
 
 
 class RawArticle(BaseModel):
@@ -107,8 +112,16 @@ def preprocess(
     input_path = Path(input_path)
     output_path = Path(output_path)
 
-    raw_payload = _read_json(input_path)
-    raw_articles = RawArticlesFile.model_validate(raw_payload)
+    try:
+        raw_articles = RawArticlesFile.model_validate_json(input_path.read_bytes())
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Input file not found: {input_path}") from None
+    except ValidationError as error:
+        raise _artifact_validation_error(
+            input_path,
+            contract_name=RawArticlesFile.__name__,
+            error=error,
+        ) from None
     normalized_articles = normalize_articles(raw_articles.articles)
     output = NormalizedArticlesFile(
         generated_at=datetime.now(UTC),
@@ -236,6 +249,38 @@ def stable_article_id(canonical_url: str) -> str:
     return f"article_{digest[:16]}"
 
 
+def preprocessor_policy_fingerprint() -> str:
+    """Return the normalization and contract policy identity."""
+
+    policy = {
+        "policy_version": PREPROCESSOR_POLICY_VERSION,
+        "schema_version": SCHEMA_VERSION,
+        "input_schema": RawArticlesFile.model_json_schema(),
+        "output_schema": NormalizedArticlesFile.model_json_schema(),
+        "http_schemes": sorted(HTTP_SCHEMES),
+        "tracking_query_keys": sorted(TRACKING_QUERY_KEYS),
+        "ignored_query_prefixes": list(IGNORED_QUERY_PREFIXES),
+        "whitespace_pattern": WHITESPACE_RE.pattern,
+        "rules": {
+            "decode_html_entities": True,
+            "reject_url_credentials": True,
+            "remove_default_ports": True,
+            "remove_fragments": True,
+            "remove_trailing_slashes": True,
+            "sort_query_pairs": True,
+            "stable_id": "sha256-canonical-url-prefix-16",
+            "deduplicate_by": "canonical_url",
+        },
+    }
+    encoded = json.dumps(
+        policy,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _normalize_path(path: str) -> str:
     if not path:
         return ""
@@ -267,13 +312,38 @@ def _is_default_port(scheme: str, port: int) -> bool:
     return (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
 
 
-def _read_json(path: Path) -> Any:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise ValueError(f"Invalid JSON in {path}") from error
-    except FileNotFoundError:
-        raise FileNotFoundError(f"Input file not found: {path}") from None
+def _artifact_validation_error(
+    path: Path,
+    *,
+    contract_name: str,
+    error: ValidationError,
+) -> ArtifactValidationError:
+    failures = []
+    for detail in error.errors(
+        include_url=False,
+        include_context=False,
+        include_input=False,
+    ):
+        location = _format_error_location(detail["loc"])
+        failures.append(f"{location} ({detail['type']})")
+
+    joined_failures = ", ".join(failures) or "<document> (validation_error)"
+    return ArtifactValidationError(
+        f"Artifact validation failed: path={path}; contract={contract_name}; "
+        f"fields={joined_failures}"
+    )
+
+
+def _format_error_location(location: tuple[int | str, ...]) -> str:
+    formatted = ""
+    for part in location:
+        if isinstance(part, int):
+            formatted += f"[{part}]"
+        elif formatted:
+            formatted += f".{part}"
+        else:
+            formatted = part
+    return formatted or "<document>"
 
 
 def _normalized_output_payload(output: NormalizedArticlesFile) -> dict[str, Any]:
@@ -286,6 +356,7 @@ def _normalized_output_payload(output: NormalizedArticlesFile) -> dict[str, Any]
 
 __all__ = [
     "ARTICLES_FILENAME",
+    "ArtifactValidationError",
     "NORMALIZED_ARTICLES_FILENAME",
     "NormalizedArticle",
     "NormalizedArticlesFile",

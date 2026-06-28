@@ -106,6 +106,7 @@ class PipelineStage:
     outputs: Callable[[], Sequence[Path]]
     configuration: Any = None
     validate_outputs: Callable[[Sequence[Path]], None] | None = None
+    dependencies: Sequence[str] = ()
 
 
 def run_pipeline(
@@ -118,13 +119,13 @@ def run_pipeline(
     path = pipeline_manifest_path(data_dir, run_id)
     manifest = _load_or_create(path, run_id, stages)
     expected_ids = [stage.stage_id for stage in stages]
+    _validate_dependencies(stages)
     if [stage.stage_id for stage in manifest.stages] != expected_ids:
         raise ValueError("Pipeline manifest stage order mismatch")
 
     manifest.status = "running"
     manifest.finished_at = None
     _touch_and_write(path, manifest)
-    force_rerun = False
     for index, definition in enumerate(stages):
         state = manifest.stages[index]
         try:
@@ -133,18 +134,15 @@ def run_pipeline(
             inputs = None
         outputs = _resolve_outputs(definition)
         if (
-            not force_rerun
-            and state.status == "completed"
+            state.status == "completed"
             and inputs is not None
             and state.input_fingerprints == inputs
             and _artifacts_match(definition, outputs, state.output_fingerprints)
         ):
             continue
 
-        if not force_rerun:
-            force_rerun = True
-            _invalidate_from(manifest, index)
-            _touch_and_write(path, manifest)
+        _invalidate_stage_and_dependents(manifest, stages, definition.stage_id)
+        _touch_and_write(path, manifest)
 
         now = datetime.now(UTC)
         state.status = "running"
@@ -195,6 +193,18 @@ def pipeline_manifest_path(data_dir: Path | str, run_id: str) -> Path:
         / run_id
         / MANIFEST_FILENAME
     )
+
+
+def _validate_dependencies(stages: Sequence[PipelineStage]) -> None:
+    positions = {stage.stage_id: index for index, stage in enumerate(stages)}
+    if len(positions) != len(stages):
+        raise ValueError("Pipeline stage IDs must be unique")
+    for index, stage in enumerate(stages):
+        for dependency in stage.dependencies:
+            if dependency not in positions:
+                raise ValueError(f"Unknown pipeline dependency: {dependency}")
+            if positions[dependency] >= index:
+                raise ValueError("Pipeline dependencies must precede dependents")
 
 
 def _load_or_create(
@@ -264,14 +274,30 @@ def _artifacts_match(
     return True
 
 
-def _invalidate_from(manifest: PipelineRunManifest, index: int) -> None:
-    for stage in manifest.stages[index:]:
-        stage.status = "pending"
-        stage.input_fingerprints = []
-        stage.output_fingerprints = []
-        stage.started_at = None
-        stage.finished_at = None
-        stage.error_category = None
+def _invalidate_stage_and_dependents(
+    manifest: PipelineRunManifest,
+    definitions: Sequence[PipelineStage],
+    stage_id: str,
+) -> None:
+    invalid_ids = {stage_id}
+    changed = True
+    while changed:
+        changed = False
+        for definition in definitions:
+            if definition.stage_id in invalid_ids:
+                continue
+            if invalid_ids.intersection(definition.dependencies):
+                invalid_ids.add(definition.stage_id)
+                changed = True
+    for state in manifest.stages:
+        if state.stage_id not in invalid_ids:
+            continue
+        state.status = "pending"
+        state.input_fingerprints = []
+        state.output_fingerprints = []
+        state.started_at = None
+        state.finished_at = None
+        state.error_category = None
 
 
 def _touch_and_write(path: Path, manifest: PipelineRunManifest) -> None:

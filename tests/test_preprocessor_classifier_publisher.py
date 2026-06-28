@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 from dtns.classifier import classify_articles
 from dtns.preprocessors import preprocess
+from dtns.preprocessors.stage import ArtifactValidationError
 from dtns.publisher import stage as publisher_stage
 from dtns.publisher import (
     AmbiguousDiscordDeliveryError,
@@ -57,6 +58,31 @@ def test_preprocess_deduplicates_and_removes_tracking_query(tmp_path):
     assert len(output.articles) == 1
     assert output.articles[0].canonical_url == "https://example.com/post?a=1&b=2"
     assert json.loads(output_path.read_text(encoding="utf-8"))["articles"][0]["id"]
+
+
+def test_preprocess_sanitizes_artifact_validation_error(tmp_path):
+    input_path = tmp_path / "articles.json"
+    output_path = tmp_path / "normalized_articles.json"
+    sensitive_value = "must-not-appear-in-validation-error"
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "articles": sensitive_value,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ArtifactValidationError) as error_info:
+        preprocess(input_path, output_path)
+
+    message = str(error_info.value)
+    assert f"path={input_path}" in message
+    assert "contract=RawArticlesFile" in message
+    assert "fields=articles (list_type)" in message
+    assert sensitive_value not in message
 
 
 def test_classifier_supports_multi_label_outputs(tmp_path):

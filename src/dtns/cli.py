@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import os
+import re
 from pathlib import Path
+from typing import TypeVar
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
+
+from pydantic import BaseModel, ValidationError
 
 from dtns.pipeline import PipelineStage, run_pipeline
 
@@ -25,6 +28,7 @@ TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
 TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
 TOPIC_TRENDS_FILENAME_TEMPLATE = "{topic}_trends.json"
 NEWSLETTER_FILENAME_TEMPLATE = "{topic}_newsletter.md"
+ArtifactModel = TypeVar("ArtifactModel", bound=BaseModel)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -214,7 +218,7 @@ def _run_all(
             ),
             inputs=(),
             outputs=lambda: (article_path,),
-            configuration={"limit_per_source": limit_per_source},
+            configuration=_collector_configuration(limit_per_source),
             validate_outputs=_validate_articles,
         ),
         PipelineStage(
@@ -222,7 +226,9 @@ def _run_all(
             action=lambda: _run_preprocess(data_dir),
             inputs=(article_path,),
             outputs=lambda: (normalized_path,),
+            configuration=_preprocessor_configuration(),
             validate_outputs=_validate_normalized_articles,
+            dependencies=("collect",),
         ),
         PipelineStage(
             stage_id="tag",
@@ -231,13 +237,16 @@ def _run_all(
             outputs=lambda: (tagged_path,),
             configuration=_ai_configuration("TAGGER"),
             validate_outputs=_validate_tagged_articles,
+            dependencies=("preprocess",),
         ),
         PipelineStage(
             stage_id="classify",
             action=lambda: _run_classify(data_dir),
             inputs=(tagged_path,),
             outputs=lambda: tuple(topic_article_paths),
+            configuration=_classifier_configuration(),
             validate_outputs=_validate_topic_articles,
+            dependencies=("tag",),
         ),
     ]
     for topic, topic_articles_path in zip(TOPICS, topic_article_paths, strict=True):
@@ -256,6 +265,7 @@ def _run_all(
                     validate_outputs=lambda paths, topic=topic: _validate_trends(
                         paths, topic
                     ),
+                    dependencies=("classify",),
                 ),
                 PipelineStage(
                     stage_id=f"edit:{topic}",
@@ -268,6 +278,7 @@ def _run_all(
                     validate_outputs=lambda paths, articles=topic_articles_path: (
                         _validate_newsletter(paths, articles)
                     ),
+                    dependencies=(f"trend:{topic}",),
                 ),
                 PipelineStage(
                     stage_id=f"publish:{topic}",
@@ -276,10 +287,15 @@ def _run_all(
                     ),
                     inputs=(newsletter_path,),
                     outputs=lambda topic=topic, path=newsletter_path: (
-                        _completed_publish_receipt(data_dir, topic, path)
+                        _completed_publish_receipt(data_dir, topic, path),
                     ),
                     configuration=_publisher_configuration(topic),
-                    validate_outputs=_validate_publish_receipt,
+                    validate_outputs=(
+                        lambda paths, topic=topic, newsletter=newsletter_path: (
+                            _validate_publish_receipt(paths, topic, newsletter)
+                        )
+                    ),
+                    dependencies=(f"edit:{topic}",),
                 ),
             ]
         )
@@ -287,12 +303,43 @@ def _run_all(
 
 
 def _ai_configuration(stage: str, *, topic: str | None = None) -> dict[str, str]:
+    if stage == "TAGGER":
+        from dtns.agents.tagger.stage import tagger_policy_fingerprint
+
+        fingerprint = tagger_policy_fingerprint()
+    elif stage == "TREND" and topic is not None:
+        from dtns.agents.trend.runner import trend_policy_fingerprint
+
+        fingerprint = trend_policy_fingerprint(topic)
+    elif stage == "EDITOR" and topic is not None:
+        from dtns.agents.editor.runner import editor_policy_fingerprint
+
+        fingerprint = editor_policy_fingerprint(topic)
+    else:
+        raise ValueError("Unknown AI stage configuration")
+    return {"topic": topic or "", "policy_fingerprint": fingerprint}
+
+
+def _collector_configuration(limit_per_source: int | None) -> dict[str, str]:
+    from dtns.collectors.runner import collector_policy_fingerprint
+
     return {
-        "topic": topic or "",
-        "model": os.getenv(f"DTNS_{stage}_MODEL", ""),
-        "gemini_model": os.getenv("GEMINI_MODEL", ""),
-        "fallback_model": os.getenv("GEMINI_FALLBACK_MODEL", ""),
+        "policy_fingerprint": collector_policy_fingerprint(
+            limit_per_source=limit_per_source
+        )
     }
+
+
+def _preprocessor_configuration() -> dict[str, str]:
+    from dtns.preprocessors.stage import preprocessor_policy_fingerprint
+
+    return {"policy_fingerprint": preprocessor_policy_fingerprint()}
+
+
+def _classifier_configuration() -> dict[str, str]:
+    from dtns.classifier.stage import classifier_policy_fingerprint
+
+    return {"policy_fingerprint": classifier_policy_fingerprint()}
 
 
 def _publisher_configuration(topic: str) -> dict[str, str]:
@@ -324,10 +371,7 @@ def _completed_publish_receipt(
         / topic
         / f"{newsletter_fingerprint}.{webhook_fingerprint}.json"
     )
-    from dtns.publisher.receipt import read_publish_receipt
-
-    receipt = read_publish_receipt(path)
-    if receipt is None or receipt.status != "completed":
+    if not _publish_receipt_matches(path, topic, newsletter_path):
         return Path()
     return path
 
@@ -349,26 +393,38 @@ def _normalize_webhook_url(webhook_url: str) -> str:
 def _validate_articles(paths: tuple[Path, ...] | list[Path]) -> None:
     from dtns.preprocessors.stage import RawArticlesFile
 
-    RawArticlesFile.model_validate(json.loads(paths[0].read_bytes()))
+    _validate_pydantic_artifact(RawArticlesFile, paths[0], "RawArticlesFile")
 
 
 def _validate_normalized_articles(paths: tuple[Path, ...] | list[Path]) -> None:
     from dtns.contracts.tagged_articles import NormalizedArticlesDocument
 
-    NormalizedArticlesDocument.model_validate(json.loads(paths[0].read_bytes()))
+    _validate_pydantic_artifact(
+        NormalizedArticlesDocument,
+        paths[0],
+        "NormalizedArticlesDocument",
+    )
 
 
 def _validate_tagged_articles(paths: tuple[Path, ...] | list[Path]) -> None:
     from dtns.contracts.tagged_articles import TaggedArticlesDocument
 
-    TaggedArticlesDocument.model_validate(json.loads(paths[0].read_bytes()))
+    _validate_pydantic_artifact(
+        TaggedArticlesDocument,
+        paths[0],
+        "TaggedArticlesDocument",
+    )
 
 
 def _validate_topic_articles(paths: tuple[Path, ...] | list[Path]) -> None:
     from dtns.classifier.stage import TopicArticlesDocument
 
     for path, topic in zip(paths, TOPICS, strict=True):
-        document = TopicArticlesDocument.model_validate(json.loads(path.read_bytes()))
+        document = _validate_pydantic_artifact(
+            TopicArticlesDocument,
+            path,
+            "TopicArticlesDocument",
+        )
         if document.topic != topic:
             raise ValueError("Classifier topic artifact mismatch")
 
@@ -378,7 +434,7 @@ def _validate_trends(
 ) -> None:
     from dtns.agents.trend.runner import TrendsFile
 
-    document = TrendsFile.model_validate(json.loads(paths[0].read_bytes()))
+    document = _validate_pydantic_artifact(TrendsFile, paths[0], "TrendsFile")
     if document.topic != topic:
         raise ValueError("Trend artifact topic mismatch")
 
@@ -386,19 +442,92 @@ def _validate_trends(
 def _validate_newsletter(
     paths: tuple[Path, ...] | list[Path], articles_path: Path
 ) -> None:
-    from dtns.agents.editor.runner import TopicArticlesFile, validate_markdown
+    from dtns.agents.editor.runner import (
+        TopicArticlesFile,
+        normalize_markdown,
+        validate_markdown,
+    )
 
-    articles = TopicArticlesFile.model_validate(json.loads(articles_path.read_bytes()))
+    articles = _validate_pydantic_artifact(
+        TopicArticlesFile,
+        articles_path,
+        "TopicArticlesFile",
+    )
     known_urls = {article.canonical_url for article in articles.articles}
-    validate_markdown(paths[0].read_text(encoding="utf-8").strip(), known_urls=known_urls)
+    markdown = paths[0].read_text(encoding="utf-8").strip()
+    normalized = normalize_markdown(markdown)
+    if normalized != markdown:
+        raise ValueError("Newsletter artifact is not normalized")
+    validate_markdown(normalized, known_urls=known_urls)
 
 
-def _validate_publish_receipt(paths: tuple[Path, ...] | list[Path]) -> None:
+def _validate_pydantic_artifact(
+    model: type[ArtifactModel],
+    path: Path,
+    contract_name: str,
+) -> ArtifactModel:
+    try:
+        return model.model_validate_json(path.read_bytes())
+    except ValidationError as error:
+        failures = "; ".join(
+            f"{'.'.join(_safe_error_location(part) for part in failure['loc']) or '<root>'}: "
+            f"{failure['msg']}"
+            for failure in error.errors(include_input=False, include_url=False)
+        )
+        raise ValueError(
+            f"Invalid {contract_name} artifact at {path}: {failures}"
+        ) from None
+
+
+def _safe_error_location(part: str | int) -> str:
+    value = str(part)
+    if isinstance(part, int) or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,79}", value):
+        return value
+    return "<field>"
+
+
+def _validate_publish_receipt(
+    paths: tuple[Path, ...] | list[Path],
+    topic: str,
+    newsletter_path: Path,
+) -> None:
+    if not _publish_receipt_matches(paths[0], topic, newsletter_path):
+        raise ValueError("Publish receipt does not match the current delivery")
+
+
+def _publish_receipt_matches(
+    receipt_path: Path,
+    topic: str,
+    newsletter_path: Path,
+) -> bool:
     from dtns.publisher.receipt import read_publish_receipt
+    from dtns.publisher.stage import split_discord_messages
 
-    receipt = read_publish_receipt(paths[0])
-    if receipt is None or receipt.status != "completed":
-        raise ValueError("Publish receipt is not completed")
+    receipt = read_publish_receipt(receipt_path)
+    if receipt is None:
+        return False
+    newsletter_bytes = newsletter_path.read_bytes()
+    newsletter_fingerprint = hashlib.sha256(newsletter_bytes).hexdigest()
+    webhook_fingerprint = _publisher_configuration(topic)["webhook_fingerprint"]
+    messages = split_discord_messages(newsletter_bytes.decode("utf-8"))
+    if (
+        receipt.status != "completed"
+        or receipt.topic != topic
+        or receipt.newsletter_fingerprint != newsletter_fingerprint
+        or receipt.webhook_fingerprint != webhook_fingerprint
+        or len(receipt.chunks) != len(messages)
+    ):
+        return False
+    return all(
+        chunk.index == index
+        and chunk.fingerprint
+        == hashlib.sha256(message.encode("utf-8")).hexdigest()
+        and chunk.character_count == len(message)
+        and chunk.status == "delivered"
+        for index, (chunk, message) in enumerate(
+            zip(receipt.chunks, messages, strict=True)
+        )
+    )
 
 
 def _load_dotenv() -> None:

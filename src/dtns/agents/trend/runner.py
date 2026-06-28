@@ -21,6 +21,7 @@ from dtns.agents.gemini import (
     DEFAULT_FALLBACK_MODEL,
     GenerationResult,
     generate_content_with_fallback,
+    generation_policy_fingerprint,
     resolve_fallback_model,
 )
 from dtns.agents.trend.checkpoint import (
@@ -304,9 +305,8 @@ def discover_trends(
     output_path = Path(output_path)
     input_bytes = input_path.read_bytes()
     try:
-        input_payload = json.loads(input_bytes)
-        document = TopicArticlesFile.model_validate(input_payload)
-    except (json.JSONDecodeError, ValidationError) as error:
+        document = TopicArticlesFile.model_validate_json(input_bytes)
+    except ValidationError as error:
         raise ValueError("Invalid topic_articles contract") from error
     normalized_topic = _normalize_topic(topic)
     if document.topic != normalized_topic:
@@ -819,11 +819,16 @@ def _candidate_response_schema(limit: int) -> dict[str, Any]:
 def _policy_fingerprint(
     *, topic: str, model: str, fallback_model: str | None
 ) -> str:
+    resolved_fallback = fallback_model or DEFAULT_FALLBACK_MODEL
     policy = {
         "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "public_schema": TrendsFile.model_json_schema(),
         "prompt": _build_system_prompt(topic),
-        "models": {"primary": model, "fallback": fallback_model or DEFAULT_FALLBACK_MODEL},
+        "models": {"primary": model, "fallback": resolved_fallback},
+        "execution_policy_fingerprint": generation_policy_fingerprint(
+            primary_model=model,
+            fallback_model=resolved_fallback,
+        ),
         "limits": {
             "map_batch": MAP_BATCH_SIZE, "map_candidates": MAP_CANDIDATE_LIMIT,
             "reduce_batch": REDUCE_BATCH_SIZE, "reduce_candidates": REDUCE_CANDIDATE_LIMIT,
@@ -836,6 +841,22 @@ def _policy_fingerprint(
     return hashlib.sha256(
         json.dumps(policy, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
+
+
+def trend_policy_fingerprint(
+    topic: str,
+    *,
+    model: str | None = None,
+    fallback_model: str | None = None,
+) -> str:
+    """Return the complete topic-specific Trend policy identity."""
+
+    normalized_topic = _normalize_topic(topic)
+    return _policy_fingerprint(
+        topic=normalized_topic,
+        model=_resolve_model(model),
+        fallback_model=fallback_model or resolve_fallback_model(),
+    )
 
 
 def _build_system_prompt(topic: str) -> str:

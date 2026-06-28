@@ -2,6 +2,7 @@
 
 from dtns.collectors.runner import (
     collect_articles,
+    collector_policy_fingerprint,
     collection_report_path,
     write_articles,
     write_collection_report,
@@ -9,6 +10,7 @@ from dtns.collectors.runner import (
 
 __all__ = [
     "collect_articles",
+    "collector_policy_fingerprint",
     "collection_report_path",
     "write_articles",
     "write_collection_report",

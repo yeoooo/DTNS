@@ -25,6 +25,7 @@ from dtns.agents.gemini import (
     DEFAULT_FALLBACK_MODEL,
     GenerationResult,
     generate_content_with_fallback,
+    generation_policy_fingerprint,
     resolve_fallback_model,
 )
 from dtns.agents.tagger.checkpoint import (
@@ -203,7 +204,7 @@ def tag_articles(
     input_bytes = input_path.read_bytes()
     input_payload = json.loads(input_bytes)
     _validate_normalized_articles_schema(input_payload)
-    document = NormalizedArticlesDocument.model_validate(input_payload)
+    document = NormalizedArticlesDocument.model_validate_json(input_bytes)
     configured_model = resolve_model(model)
     client = llm_client or GeminiTaggerClient(model=configured_model)
     input_fingerprint = hashlib.sha256(input_bytes).hexdigest()
@@ -618,6 +619,7 @@ def resolve_model(model: str | None = None) -> str:
 
 
 def _policy_fingerprint(*, model: str, fallback_model: str | None) -> str:
+    resolved_fallback = fallback_model or DEFAULT_FALLBACK_MODEL
     policy = {
         "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "tagged_articles_schema_version": TAGGED_SCHEMA_VERSION,
@@ -626,8 +628,12 @@ def _policy_fingerprint(*, model: str, fallback_model: str | None) -> str:
         "prompt": PROMPT_PATH.read_text(encoding="utf-8"),
         "models": {
             "primary": model,
-            "fallback": fallback_model or DEFAULT_FALLBACK_MODEL,
+            "fallback": resolved_fallback,
         },
+        "execution_policy_fingerprint": generation_policy_fingerprint(
+            primary_model=model,
+            fallback_model=resolved_fallback,
+        ),
         "batch_size": TAGGER_BATCH_SIZE,
         "max_batch_attempts": MAX_BATCH_ATTEMPTS,
         "limits": {
@@ -645,6 +651,17 @@ def _policy_fingerprint(*, model: str, fallback_model: str | None) -> str:
     }
     encoded = json.dumps(policy, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def tagger_policy_fingerprint(
+    *, model: str | None = None, fallback_model: str | None = None
+) -> str:
+    """Return the complete Tagger policy identity used for checkpoint resume."""
+
+    return _policy_fingerprint(
+        model=resolve_model(model),
+        fallback_model=fallback_model or resolve_fallback_model(),
+    )
 
 
 def _default_run_id(input_fingerprint: str, policy_fingerprint: str) -> str:
