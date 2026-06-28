@@ -6,6 +6,7 @@ Discord Webhook. It is deterministic and does not use AI.
 
 from __future__ import annotations
 
+import math
 import os
 import time
 from collections.abc import Mapping
@@ -209,7 +210,7 @@ def _send_discord_message(
             time.sleep(_discord_retry_after(response, attempt))
             continue
 
-        if response.status_code >= 500:
+        if 500 <= response.status_code < 600:
             if attempt == max_attempts:
                 raise _publish_error(response, attempt)
             time.sleep(_exponential_retry_delay(attempt))
@@ -224,25 +225,35 @@ def _send_discord_message(
 
 
 def _discord_retry_after(response: httpx.Response, attempt: int) -> float:
-    retry_after: object | None = None
+    retry_after_candidates: list[object] = []
     try:
         payload = response.json()
         if isinstance(payload, dict):
-            retry_after = payload.get("retry_after")
+            retry_after_candidates.append(payload.get("retry_after"))
     except ValueError:
         pass
 
-    if retry_after is None:
-        retry_after = response.headers.get("Retry-After")
+    retry_after_candidates.append(response.headers.get("Retry-After"))
+    for retry_after in retry_after_candidates:
+        delay = _parse_retry_delay(retry_after)
+        if delay is not None:
+            return delay + RATE_LIMIT_BUFFER_SECONDS
+
+    return _exponential_retry_delay(attempt)
+
+
+def _parse_retry_delay(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
 
     try:
-        delay = float(retry_after)
+        delay = float(value)
     except (TypeError, ValueError):
-        return _exponential_retry_delay(attempt)
+        return None
 
-    if delay < 0:
-        return _exponential_retry_delay(attempt)
-    return delay + RATE_LIMIT_BUFFER_SECONDS
+    if not math.isfinite(delay) or delay < 0:
+        return None
+    return delay
 
 
 def _exponential_retry_delay(attempt: int) -> float:
