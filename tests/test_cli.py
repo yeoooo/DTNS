@@ -5,6 +5,7 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import httpx
 import pytest
 
 from dtns import cli
@@ -13,7 +14,11 @@ from dtns.publisher.receipt import (
     PublishReceipt,
     write_publish_receipt,
 )
-from dtns.publisher.stage import split_discord_messages
+from dtns.publisher.stage import (
+    build_delivery_content,
+    publish_newsletter,
+    split_discord_messages,
+)
 
 
 def test_run_all_executes_complete_pipeline_in_order(monkeypatch, tmp_path):
@@ -265,8 +270,11 @@ def test_publish_receipt_requires_matching_identity_and_chunks(monkeypatch, tmp_
     monkeypatch.setenv("DISCORD_WEBHOOK_TECHNOLOGY", webhook)
     newsletter = tmp_path / "technology_newsletter.md"
     newsletter.write_text("# newsletter", encoding="utf-8")
-    message = split_discord_messages("# newsletter")[0]
-    newsletter_fingerprint = hashlib.sha256(newsletter.read_bytes()).hexdigest()
+    delivery_content = build_delivery_content("# newsletter")
+    message = split_discord_messages(delivery_content)[0]
+    newsletter_fingerprint = hashlib.sha256(
+        delivery_content.encode("utf-8")
+    ).hexdigest()
     webhook_fingerprint = cli._publisher_configuration("technology")[
         "webhook_fingerprint"
     ]
@@ -304,3 +312,32 @@ def test_publish_receipt_requires_matching_identity_and_chunks(monkeypatch, tmp_
     receipt.chunks[0].fingerprint = hashlib.sha256(message.encode()).hexdigest()
     write_publish_receipt(receipt_path, receipt)
     assert cli._publish_receipt_matches(receipt_path, "technology", newsletter)
+
+
+def test_pipeline_resolves_receipt_from_exact_labeled_delivery(monkeypatch, tmp_path):
+    webhook = "https://discord.com/api/webhooks/1/token"
+    monkeypatch.setenv("DISCORD_WEBHOOK_TECHNOLOGY", webhook)
+    monkeypatch.setenv("DTNS_PUBLISH_LABEL", "🧪 테스트 발행")
+    newsletter = tmp_path / "technology_newsletter.md"
+    newsletter.write_text("# newsletter", encoding="utf-8")
+
+    def handler(request):
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        publish_newsletter(
+            newsletter,
+            topic="technology",
+            webhook_url=webhook,
+            client=client,
+            receipt_root=tmp_path,
+            run_id="run-1",
+        )
+
+    receipt_path = cli._completed_publish_receipt(
+        tmp_path,
+        "technology",
+        newsletter,
+    )
+    assert receipt_path.is_file()
+    cli._validate_publish_receipt([receipt_path], "technology", newsletter)

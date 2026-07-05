@@ -362,7 +362,12 @@ def _completed_publish_receipt(
     topic: str,
     newsletter_path: Path,
 ) -> Path:
-    newsletter_fingerprint = hashlib.sha256(newsletter_path.read_bytes()).hexdigest()
+    from dtns.publisher.stage import build_delivery_content
+
+    delivery_bytes = build_delivery_content(
+        newsletter_path.read_text(encoding="utf-8")
+    ).encode("utf-8")
+    newsletter_fingerprint = hashlib.sha256(delivery_bytes).hexdigest()
     webhook_fingerprint = _publisher_configuration(topic)["webhook_fingerprint"]
     path = (
         data_dir
@@ -501,15 +506,19 @@ def _publish_receipt_matches(
     newsletter_path: Path,
 ) -> bool:
     from dtns.publisher.receipt import read_publish_receipt
-    from dtns.publisher.stage import split_discord_messages
+    from dtns.publisher.stage import build_delivery_content, split_discord_messages
 
     receipt = read_publish_receipt(receipt_path)
     if receipt is None:
         return False
-    newsletter_bytes = newsletter_path.read_bytes()
-    newsletter_fingerprint = hashlib.sha256(newsletter_bytes).hexdigest()
+    delivery_content = build_delivery_content(
+        newsletter_path.read_text(encoding="utf-8")
+    )
+    newsletter_fingerprint = hashlib.sha256(
+        delivery_content.encode("utf-8")
+    ).hexdigest()
     webhook_fingerprint = _publisher_configuration(topic)["webhook_fingerprint"]
-    messages = split_discord_messages(newsletter_bytes.decode("utf-8"))
+    messages = split_discord_messages(delivery_content)
     if (
         receipt.status != "completed"
         or receipt.topic != topic

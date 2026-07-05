@@ -105,13 +105,11 @@ def publish_newsletter(
     input_path = Path(input_path)
     markdown_bytes = input_path.read_bytes()
     content = markdown_bytes.decode("utf-8")
-    resolved_publish_label = _resolve_publish_label(publish_label)
-    resolved_publication_date = publication_date or datetime.now(PUBLISH_TIMEZONE).date()
-    publication_marker = _publication_marker(resolved_publication_date)
-    delivery_labels = [f"> {publication_marker}"]
-    if resolved_publish_label:
-        delivery_labels.append(f"> {resolved_publish_label}")
-    delivery_content = "\n".join(delivery_labels) + f"\n\n{content}"
+    delivery_content = build_delivery_content(
+        content,
+        publish_label=publish_label,
+        publication_date=publication_date,
+    )
     delivery_bytes = delivery_content.encode("utf-8")
     messages = split_discord_messages(delivery_content)
     resolved_webhook_url = resolve_webhook_url(topic=topic, webhook_url=webhook_url)
@@ -183,6 +181,25 @@ def publish_newsletter(
         message_count=len(messages),
         character_count=len(delivery_content),
     )
+
+
+def build_delivery_content(
+    content: str,
+    *,
+    publish_label: str | None = None,
+    publication_date: date | None = None,
+) -> str:
+    """Build the exact Discord body shared by publishing and receipt checks."""
+
+    resolved_publish_label = _resolve_publish_label(publish_label)
+    resolved_publication_date = (
+        publication_date or datetime.now(PUBLISH_TIMEZONE).date()
+    )
+    publication_marker = _publication_marker(resolved_publication_date)
+    delivery_labels = [f"> {publication_marker}"]
+    if resolved_publish_label:
+        delivery_labels.append(f"> {resolved_publish_label}")
+    return "\n".join(delivery_labels) + f"\n\n{content}"
 
 
 def _resolve_publish_label(value: str | None) -> str:
