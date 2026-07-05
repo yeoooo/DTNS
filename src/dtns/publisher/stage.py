@@ -34,6 +34,7 @@ DISCORD_CONTENT_LIMIT = 2000
 DEFAULT_TIMEOUT_SECONDS = 20.0
 DEFAULT_MAX_ATTEMPTS = 5
 RATE_LIMIT_BUFFER_SECONDS = 0.05
+PUBLISH_LABEL_ENV_VAR = "DTNS_PUBLISH_LABEL"
 NEWSLETTER_FILENAME_TEMPLATE = "{topic}_newsletter.md"
 WEBHOOK_ENV_VARS: Mapping[Topic, str] = {
     "technology": "DISCORD_WEBHOOK_TECHNOLOGY",
@@ -91,6 +92,7 @@ def publish_newsletter(
     client: httpx.Client | None = None,
     receipt_root: Path | str | None = None,
     run_id: str | None = None,
+    publish_label: str | None = None,
 ) -> PublishResult:
     """Read Markdown from ``input_path`` and publish it to Discord."""
 
@@ -100,7 +102,14 @@ def publish_newsletter(
     input_path = Path(input_path)
     markdown_bytes = input_path.read_bytes()
     content = markdown_bytes.decode("utf-8")
-    messages = split_discord_messages(content)
+    resolved_publish_label = _resolve_publish_label(publish_label)
+    delivery_content = (
+        f"> {resolved_publish_label}\n\n{content}"
+        if resolved_publish_label
+        else content
+    )
+    delivery_bytes = delivery_content.encode("utf-8")
+    messages = split_discord_messages(delivery_content)
     resolved_webhook_url = resolve_webhook_url(topic=topic, webhook_url=webhook_url)
 
     receipt_path: Path | None = None
@@ -111,7 +120,7 @@ def publish_newsletter(
             root,
             topic=topic,
             run_id=run_id,
-            markdown_bytes=markdown_bytes,
+            delivery_bytes=delivery_bytes,
             webhook_url=resolved_webhook_url,
             messages=messages,
         )
@@ -168,8 +177,19 @@ def publish_newsletter(
         webhook_url=resolved_webhook_url,
         input_path=input_path,
         message_count=len(messages),
-        character_count=len(content),
+        character_count=len(delivery_content),
     )
+
+
+def _resolve_publish_label(value: str | None) -> str:
+    label = os.getenv(PUBLISH_LABEL_ENV_VAR, "") if value is None else value
+    if label != label.strip():
+        raise ValueError("Discord publish label must not have surrounding whitespace.")
+    if "\r" in label or "\n" in label:
+        raise ValueError("Discord publish label must be a single line.")
+    if len(label) > 100:
+        raise ValueError("Discord publish label must not exceed 100 characters.")
+    return label
 
 
 def publish_topic_newsletter(
@@ -358,11 +378,11 @@ def _prepare_publish_receipt(
     *,
     topic: Topic,
     run_id: str | None,
-    markdown_bytes: bytes,
+    delivery_bytes: bytes,
     webhook_url: str,
     messages: list[str],
 ) -> tuple[Path, PublishReceipt]:
-    newsletter_fingerprint = sha256(markdown_bytes).hexdigest()
+    newsletter_fingerprint = sha256(delivery_bytes).hexdigest()
     webhook_fingerprint = sha256(
         _normalize_webhook_url(webhook_url).encode("utf-8")
     ).hexdigest()

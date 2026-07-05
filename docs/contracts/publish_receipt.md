@@ -13,7 +13,10 @@ atomically after every confirmed chunk delivery.
 
 ## Identity
 
-- Newsletter fingerprint is SHA-256 of the exact Markdown bytes.
+- Newsletter fingerprint is SHA-256 of the exact Discord delivery bytes. These
+  are the Markdown bytes with any deterministic publish label prepended.
+- A manual test-publication label therefore has a different receipt identity
+  from an unlabeled scheduled publication of the same newsletter.
 - Webhook fingerprint is SHA-256 of the normalized webhook URL.
 - The webhook URL itself must never be persisted.
 - Chunk fingerprints are calculated after deterministic Discord splitting.

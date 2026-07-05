@@ -138,6 +138,61 @@ def test_split_discord_messages_rejects_empty_content():
         split_discord_messages("")
 
 
+def test_manual_publish_label_is_sent_only_as_delivery_prefix(monkeypatch, tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    original = "# Newsletter\n\n" + "x" * 2100
+    input_path.write_text(original, encoding="utf-8")
+    monkeypatch.setenv("DTNS_PUBLISH_LABEL", "🧪 테스트 발행")
+    requests: list[httpx.Request] = []
+
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        result = publish_newsletter(
+            input_path,
+            topic="technology",
+            webhook_url="https://discord.example/webhook-test",
+            client=client,
+        )
+
+    payloads = [json.loads(request.content) for request in requests]
+    assert payloads[0]["content"].startswith("> 🧪 테스트 발행\n\n# Newsletter")
+    assert all("🧪 테스트 발행" not in item["content"] for item in payloads[1:])
+    assert all(len(item["content"]) <= 2000 for item in payloads)
+    assert input_path.read_text(encoding="utf-8") == original
+    assert result.character_count == len("> 🧪 테스트 발행\n\n" + original)
+
+
+def test_publish_label_changes_receipt_identity(monkeypatch, tmp_path):
+    input_path = tmp_path / "newsletter.md"
+    input_path.write_text("# Newsletter", encoding="utf-8")
+
+    def handler(request):
+        return httpx.Response(204)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        publish_newsletter(
+            input_path,
+            topic="technology",
+            webhook_url="https://discord.example/webhook-test",
+            client=client,
+        )
+        monkeypatch.setenv("DTNS_PUBLISH_LABEL", "🧪 테스트 발행")
+        publish_newsletter(
+            input_path,
+            topic="technology",
+            webhook_url="https://discord.example/webhook-test",
+            client=client,
+        )
+
+    receipts = list(
+        (tmp_path / ".state" / "publisher" / "technology").glob("*.json")
+    )
+    assert len(receipts) == 2
+
+
 def test_publisher_retries_discord_rate_limit(monkeypatch, tmp_path):
     input_path = tmp_path / "newsletter.md"
     input_path.write_text("# Newsletter", encoding="utf-8")
