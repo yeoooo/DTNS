@@ -9,6 +9,10 @@ add another pipeline artifact.
 - One non-empty Markdown chunk of at most 2,000 characters.
 - One resolved Discord Webhook URL.
 - `allowed_mentions.parse` must be empty.
+- The first chunk starts with the KST publication marker `N월 N주차`.
+- Week-of-month uses fixed day ranges: days 1-7 are week 1, 8-14 are week 2,
+  15-21 are week 3, 22-28 are week 4, and 29-31 are week 5.
+- A manual test-publication label follows the publication marker when present.
 
 ## Outcomes
 

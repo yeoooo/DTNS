@@ -11,12 +11,13 @@ import os
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -35,6 +36,7 @@ DEFAULT_TIMEOUT_SECONDS = 20.0
 DEFAULT_MAX_ATTEMPTS = 5
 RATE_LIMIT_BUFFER_SECONDS = 0.05
 PUBLISH_LABEL_ENV_VAR = "DTNS_PUBLISH_LABEL"
+PUBLISH_TIMEZONE = ZoneInfo("Asia/Seoul")
 NEWSLETTER_FILENAME_TEMPLATE = "{topic}_newsletter.md"
 WEBHOOK_ENV_VARS: Mapping[Topic, str] = {
     "technology": "DISCORD_WEBHOOK_TECHNOLOGY",
@@ -93,6 +95,7 @@ def publish_newsletter(
     receipt_root: Path | str | None = None,
     run_id: str | None = None,
     publish_label: str | None = None,
+    publication_date: date | None = None,
 ) -> PublishResult:
     """Read Markdown from ``input_path`` and publish it to Discord."""
 
@@ -103,11 +106,12 @@ def publish_newsletter(
     markdown_bytes = input_path.read_bytes()
     content = markdown_bytes.decode("utf-8")
     resolved_publish_label = _resolve_publish_label(publish_label)
-    delivery_content = (
-        f"> {resolved_publish_label}\n\n{content}"
-        if resolved_publish_label
-        else content
-    )
+    resolved_publication_date = publication_date or datetime.now(PUBLISH_TIMEZONE).date()
+    publication_marker = _publication_marker(resolved_publication_date)
+    delivery_labels = [f"> {publication_marker}"]
+    if resolved_publish_label:
+        delivery_labels.append(f"> {resolved_publish_label}")
+    delivery_content = "\n".join(delivery_labels) + f"\n\n{content}"
     delivery_bytes = delivery_content.encode("utf-8")
     messages = split_discord_messages(delivery_content)
     resolved_webhook_url = resolve_webhook_url(topic=topic, webhook_url=webhook_url)
@@ -190,6 +194,11 @@ def _resolve_publish_label(value: str | None) -> str:
     if len(label) > 100:
         raise ValueError("Discord publish label must not exceed 100 characters.")
     return label
+
+
+def _publication_marker(value: date) -> str:
+    week_of_month = (value.day - 1) // 7 + 1
+    return f"{value.month}월 {week_of_month}주차"
 
 
 def publish_topic_newsletter(

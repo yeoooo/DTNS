@@ -155,14 +155,28 @@ def test_manual_publish_label_is_sent_only_as_delivery_prefix(monkeypatch, tmp_p
             topic="technology",
             webhook_url="https://discord.example/webhook-test",
             client=client,
+            publication_date=datetime(2026, 7, 5, tzinfo=UTC).date(),
         )
 
     payloads = [json.loads(request.content) for request in requests]
-    assert payloads[0]["content"].startswith("> 🧪 테스트 발행\n\n# Newsletter")
+    prefix = "> 7월 1주차\n> 🧪 테스트 발행\n\n"
+    assert payloads[0]["content"].startswith(prefix + "# Newsletter")
     assert all("🧪 테스트 발행" not in item["content"] for item in payloads[1:])
+    assert all("7월 1주차" not in item["content"] for item in payloads[1:])
     assert all(len(item["content"]) <= 2000 for item in payloads)
     assert input_path.read_text(encoding="utf-8") == original
-    assert result.character_count == len("> 🧪 테스트 발행\n\n" + original)
+    assert result.character_count == len(prefix + original)
+
+
+@pytest.mark.parametrize(
+    ("day", "expected"),
+    [(1, "7월 1주차"), (8, "7월 2주차"), (15, "7월 3주차"),
+     (22, "7월 4주차"), (29, "7월 5주차")],
+)
+def test_publication_marker_uses_korean_week_of_month(day, expected):
+    assert publisher_stage._publication_marker(
+        datetime(2026, 7, day, tzinfo=UTC).date()
+    ) == expected
 
 
 def test_publish_label_changes_receipt_identity(monkeypatch, tmp_path):
