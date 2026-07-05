@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/dtns/contracts/editor_draft.schema.json",
+  "title": "Editor Draft",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "topic",
+    "generated_at",
+    "title",
+    "summary_items",
+    "trend_sections",
+    "insight_items"
+  ],
+  "properties": {
+    "schema_version": { "const": "1.0" },
+    "topic": {
+      "type": "string",
+      "enum": ["technology", "backend", "qa"]
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "title": { "$ref": "#/$defs/prose160" },
+    "summary_items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/prose500" },
+      "minItems": 1,
+      "maxItems": 5
+    },
+    "trend_sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/trendSection" },
+      "minItems": 1,
+      "maxItems": 8
+    },
+    "insight_items": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/prose500" },
+      "minItems": 1,
+      "maxItems": 5
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "prose160": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^(?:(?!https?://|\\]\\s*\\(|<a\\s|<https?://)[\\s\\S])*$"
+    },
+    "prose500": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?:(?!https?://|\\]\\s*\\(|<a\\s|<https?://)[\\s\\S])*$"
+    },
+    "trendSection": {
+      "type": "object",
+      "required": [
+        "trend_id",
+        "heading",
+        "overview",
+        "why_it_matters",
+        "article_ids"
+      ],
+      "properties": {
+        "trend_id": { "$ref": "#/$defs/id" },
+        "heading": { "$ref": "#/$defs/prose160" },
+        "overview": { "$ref": "#/$defs/prose500" },
+        "why_it_matters": { "$ref": "#/$defs/prose500" },
+        "article_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/id" },
+          "minItems": 1,
+          "maxItems": 20,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

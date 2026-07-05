@@ -17,10 +17,15 @@ data/.state/editor/<topic>/<run_id>/
 ## Generation And Validation
 
 - Editor accepts at most eight final trends from the Trend contract.
+- AI generation follows `editor_draft.md`: the model emits structured prose and
+  article IDs without receiving or producing URLs.
+- Runtime code resolves validated article IDs to titles and canonical URLs and
+  renders the newsletter Markdown deterministically.
 - Detect output-token or length finish reasons before accepting Markdown.
 - Normalize Discord-incompatible separators and level-four headings.
 - Require title, summary, trends, and insights sections.
-- Require all supplied article links to use known input URLs.
+- Require every rendered article link to exactly match the title and canonical
+  URL associated with its validated article ID.
 - Reject JSON, front matter, code fences, empty output, and output over 12,000
   characters.
 - Retry a recoverable content failure once, then use the configured fallback

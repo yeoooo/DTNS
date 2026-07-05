@@ -1,12 +1,12 @@
 # Editor Agents
 
-Editor agents read topic trends, optionally enrich them with topic article
-metadata, and write Korean Markdown newsletters for any topic.
+Editor agents read topic trends and topic article metadata, ask Gemini for a
+URL-free structured draft, and deterministically render Korean Markdown.
 
 Inputs:
 
 - `topic_trends.json`
-- optional `topic_articles.json`
+- `topic_articles.json` for every non-empty trend input
 
 Outputs:
 
@@ -15,18 +15,19 @@ Outputs:
 Internal state:
 
 - `.state/editor/<topic>/<run_id>/candidate.md`
+- `.state/editor/<topic>/<run_id>/editor_draft.json`
 - `.state/editor/<topic>/<run_id>/checkpoint.json`
 
 The final file is replaced atomically only after the candidate passes the
 newsletter contract. A matching checkpoint is resumed without another model
-request; malformed, truncated, overlong, or unknown-URL output is rejected.
+request. Gemini never receives article URLs and returns prose plus IDs as JSON;
+the renderer alone resolves IDs to stored titles and canonical URLs.
 
 Prompt files:
 
 - `src/dtns/prompts/editor_<topic>.md` when present
 
-Editors should write natural Korean Markdown, summarize trends and supplied
+Editors should write natural Korean prose, summarize trends and supplied
 articles, generate weekly insights, explain why trends matter, keep technical
 names in English, avoid full article translation, and never fabricate missing
-information. When article metadata is supplied, editors should cite original
-article URLs.
+information.

@@ -52,6 +52,26 @@ def _response(text, finish_reason="STOP"):
     )
 
 
+def _draft_response(*, article_id="article-0", trend_id="trend-0"):
+    return json.dumps(
+        {
+            "title": "이번 주 Technology 뉴스레터",
+            "summary_items": ["이번 주의 핵심 기술 변화를 정리합니다."],
+            "trend_sections": [
+                {
+                    "trend_id": trend_id,
+                    "heading": "🚀 핵심 변화",
+                    "overview": "개발 생태계의 주요 변화를 설명합니다.",
+                    "why_it_matters": "개발자와 운영 팀의 대응이 필요합니다.",
+                    "article_ids": [article_id],
+                }
+            ],
+            "insight_items": ["관련 기술의 변화를 계속 확인해야 합니다."],
+        },
+        ensure_ascii=False,
+    )
+
+
 def _write_trends(path, *, count=1):
     now = datetime(2026, 6, 25, 0, 0, tzinfo=UTC).isoformat()
     path.write_text(
@@ -69,6 +89,34 @@ def _write_trends(path, *, count=1):
                         "why_it_matters": "중요성",
                         "article_ids": [f"article-{index}"],
                         "keywords": [],
+                    }
+                    for index in range(count)
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_articles(path, *, count=1):
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": "2026-06-25T00:00:00Z",
+                "topic": "technology",
+                "articles": [
+                    {
+                        "id": f"article-{index}",
+                        "source": "example",
+                        "title": f"Example [Article] {index}",
+                        "canonical_url": f"https://example.com/article-{index}",
+                        "published_at": "2026-06-24T12:00:00Z",
+                        "tags": [],
+                        "technologies": [],
+                        "domains": [],
+                        "ai_metadata": {"model": "test-model", "confidence": 1.0},
+                        "classification": {"matched_rules": []},
                     }
                     for index in range(count)
                 ],
@@ -340,20 +388,23 @@ def test_editor_checks_topic_mismatch_after_topic_articles_validation(tmp_path):
 
 def test_editor_retries_truncation_then_uses_fallback(tmp_path, monkeypatch):
     input_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
     output_path = tmp_path / "technology_newsletter.md"
     _write_trends(input_path)
+    _write_articles(articles_path)
     monkeypatch.setenv("GEMINI_FALLBACK_MODEL", "fallback-model")
     client = FakeClient(
         [
-            _response(VALID_MARKDOWN, "MAX_TOKENS"),
-            _response("# invalid"),
-            _response(VALID_MARKDOWN),
+            _response(_draft_response(), "MAX_TOKENS"),
+            _response("not json"),
+            _response(_draft_response()),
         ]
     )
 
     write_newsletter(
         input_path,
         output_path,
+        articles_path=articles_path,
         model="primary-model",
         client=client,
         run_id="retry-run",
@@ -368,13 +419,16 @@ def test_editor_retries_truncation_then_uses_fallback(tmp_path, monkeypatch):
 
 def test_editor_resumes_matching_checkpoint_without_model_call(tmp_path):
     input_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
     output_path = tmp_path / "technology_newsletter.md"
     state_path = tmp_path / "editor-state"
     _write_trends(input_path)
-    first_client = FakeClient([_response(VALID_MARKDOWN)])
+    _write_articles(articles_path)
+    first_client = FakeClient([_response(_draft_response())])
     write_newsletter(
         input_path,
         output_path,
+        articles_path=articles_path,
         client=first_client,
         run_id="resume-run",
         state_path=state_path,
@@ -385,32 +439,208 @@ def test_editor_resumes_matching_checkpoint_without_model_call(tmp_path):
     resumed = write_newsletter(
         input_path,
         output_path,
+        articles_path=articles_path,
         client=resume_client,
         run_id="resume-run",
         state_path=state_path,
     )
 
-    assert resumed == VALID_MARKDOWN.strip()
+    assert "https://example.com/article-0" in resumed
     assert resume_client.models.calls == []
     assert output_path.read_text(encoding="utf-8").strip() == resumed
 
 
 def test_failed_generation_preserves_existing_newsletter(tmp_path):
     input_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
     output_path = tmp_path / "technology_newsletter.md"
     _write_trends(input_path)
+    _write_articles(articles_path)
     output_path.write_text("existing newsletter", encoding="utf-8")
-    client = FakeClient([_response("# invalid") for _ in range(3)])
+    client = FakeClient([_response("not json") for _ in range(3)])
 
     with pytest.raises(ValueError, match="failed content validation"):
         write_newsletter(
             input_path,
             output_path,
+            articles_path=articles_path,
             client=client,
             run_id="failed-run",
         )
 
     assert output_path.read_text(encoding="utf-8") == "existing newsletter"
+
+
+def test_editor_does_not_send_urls_and_renders_links_from_article_contract(tmp_path):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    output_path = tmp_path / "technology_newsletter.md"
+    _write_trends(trends_path)
+    _write_articles(articles_path)
+    client = FakeClient([_response(_draft_response())])
+
+    markdown = write_newsletter(
+        trends_path,
+        output_path,
+        articles_path=articles_path,
+        client=client,
+        run_id="structured-draft-run",
+    )
+
+    request = client.models.calls[0]
+    assert "https://example.com" not in json.dumps(request, default=str)
+    assert "[Example \\[Article\\] 0](https://example.com/article-0)" in markdown
+    assert request["config"]["response_mime_type"] == "application/json"
+
+
+def test_editor_retries_misplaced_article_id_with_id_only_feedback(tmp_path):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    _write_trends(trends_path, count=2)
+    _write_articles(articles_path, count=2)
+    misplaced = _draft_response(article_id="article-1", trend_id="trend-0")
+    client = FakeClient([_response(misplaced), _response(_draft_response())])
+
+    write_newsletter(
+        trends_path,
+        tmp_path / "technology_newsletter.md",
+        articles_path=articles_path,
+        client=client,
+        run_id="reference-retry-run",
+    )
+
+    corrective_payload = json.loads(client.models.calls[1]["contents"][1])
+    assert corrective_payload["validation_feedback"] == (
+        "misplaced_article_id:trend-0:article-1"
+    )
+    assert "https://" not in client.models.calls[1]["contents"][1]
+
+
+def test_editor_does_not_store_draft_before_markdown_validation(
+    tmp_path,
+    monkeypatch,
+):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    state_path = tmp_path / "editor-state"
+    _write_trends(trends_path)
+    _write_articles(articles_path)
+    monkeypatch.setattr(runner, "render_newsletter", lambda *_: "invalid")
+
+    with pytest.raises(ValueError, match="missing required sections"):
+        write_newsletter(
+            trends_path,
+            tmp_path / "technology_newsletter.md",
+            articles_path=articles_path,
+            client=FakeClient([_response(_draft_response())]),
+            run_id="invalid-render-run",
+            state_path=state_path,
+        )
+
+    assert not (state_path / "editor_draft.json").exists()
+    assert not (state_path / "candidate.md").exists()
+    assert not (state_path / "checkpoint.json").exists()
+
+
+def test_renderer_rejects_unknown_and_misplaced_ids():
+    now = datetime(2026, 6, 25, tzinfo=UTC)
+    trends = runner.TrendsFile(
+        schema_version="1.0",
+        generated_at=now,
+        topic="technology",
+        trends=[
+            runner.Trend(
+                id="trend-0",
+                title="변화",
+                importance="high",
+                summary="요약",
+                why_it_matters="중요성",
+                article_ids=["article-0"],
+            )
+        ],
+    )
+    draft = runner.EditorDraft(
+        topic="technology",
+        generated_at=now,
+        title="이번 주 기술",
+        summary_items=["핵심 요약입니다."],
+        trend_sections=[
+            runner.DraftTrendSection(
+                trend_id="trend-0",
+                heading="변화",
+                overview="변화를 설명합니다.",
+                why_it_matters="중요한 변화입니다.",
+                article_ids=["article-1"],
+            )
+        ],
+        insight_items=["계속 관찰합니다."],
+    )
+
+    with pytest.raises(ValueError, match="unknown_article_id:article-1"):
+        runner.render_newsletter(draft, trends, [])
+
+
+def test_renderer_exact_url_check_is_separate_from_public_validation():
+    markdown = VALID_MARKDOWN + "\n[링크](HTTPS://KNOWN.EXAMPLE/path)"
+
+    assert validate_markdown(
+        markdown,
+        known_urls={"https://known.example/path"},
+    )
+    with pytest.raises(ValueError, match="non-canonical article URLs"):
+        runner._validate_rendered_urls_exact(
+            markdown,
+            known_urls={"https://known.example/path"},
+        )
+
+
+def test_renderer_exact_check_rejects_unselected_input_article_url(
+    tmp_path,
+    monkeypatch,
+):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    state_path = tmp_path / "editor-state"
+    _write_trends(trends_path)
+    _write_articles(articles_path, count=2)
+    original_renderer = runner.render_newsletter
+
+    def render_with_unselected_url(draft, trends, articles):
+        return (
+            original_renderer(draft, trends, articles)
+            + "\n[선택되지 않은 글](https://example.com/article-1)"
+        )
+
+    monkeypatch.setattr(runner, "render_newsletter", render_with_unselected_url)
+
+    with pytest.raises(ValueError, match="non-canonical article URLs"):
+        write_newsletter(
+            trends_path,
+            tmp_path / "technology_newsletter.md",
+            articles_path=articles_path,
+            client=FakeClient([_response(_draft_response())]),
+            run_id="unselected-url-run",
+            state_path=state_path,
+        )
+
+    assert not (state_path / "editor_draft.json").exists()
+    assert not (state_path / "candidate.md").exists()
+
+
+def test_policy_fingerprint_changes_with_contract_documents(monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "_editor_contract_documents",
+        lambda: {"editor_draft.md": "version-one"},
+    )
+    first = runner.editor_policy_fingerprint("technology", model="model")
+    monkeypatch.setattr(
+        runner,
+        "_editor_contract_documents",
+        lambda: {"editor_draft.md": "version-two"},
+    )
+
+    assert runner.editor_policy_fingerprint("technology", model="model") != first
 
 
 def test_atomic_write_fsyncs_file_and_parent_directory(tmp_path, monkeypatch):

@@ -65,6 +65,9 @@ LATIN_RE = re.compile(r"[A-Za-z]")
 ATX_HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
 BOLD_LABEL_RE = re.compile(r"^\s*\*\*[^*]+\*\*\s*$", re.MULTILINE)
 URL_START_RE = re.compile(r"https?://", re.IGNORECASE)
+PROHIBITED_PROSE_RE = re.compile(
+    r"https?://|\]\s*\(|<a\s|<https?://", re.IGNORECASE
+)
 FRONT_MATTER_RE = re.compile(r"\A\s*---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 SECTION_PATTERNS = {
     "title": re.compile(r"^#\s+\S+", re.MULTILINE),
@@ -236,6 +239,68 @@ class TopicArticlesFile(BaseModel):
         return _require_timezone(value, "generated_at")
 
 
+class DraftTrendSection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    trend_id: str = Field(
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    heading: str = Field(min_length=1, max_length=160)
+    overview: str = Field(min_length=1, max_length=500)
+    why_it_matters: str = Field(min_length=1, max_length=500)
+    article_ids: list[str] = Field(min_length=1, max_length=20)
+
+    @field_validator("heading", "overview", "why_it_matters")
+    @classmethod
+    def reject_links(cls, value: str) -> str:
+        return _reject_prohibited_prose(value)
+
+    @field_validator("article_ids")
+    @classmethod
+    def validate_article_ids(cls, values: list[str]) -> list[str]:
+        if len(values) != len(set(values)):
+            raise ValueError("article IDs must be unique")
+        if any(
+            not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,119}", value)
+            for value in values
+        ):
+            raise ValueError("article IDs have an invalid format")
+        return values
+
+
+class EditorDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    topic: Literal["technology", "backend", "qa"]
+    generated_at: datetime
+    title: str = Field(min_length=1, max_length=160)
+    summary_items: list[str] = Field(min_length=1, max_length=5)
+    trend_sections: list[DraftTrendSection] = Field(min_length=1, max_length=8)
+    insight_items: list[str] = Field(min_length=1, max_length=5)
+
+    @field_validator("generated_at")
+    @classmethod
+    def require_generated_timezone(cls, value: datetime) -> datetime:
+        return _require_timezone(value, "generated_at")
+
+    @field_validator("title")
+    @classmethod
+    def validate_title(cls, value: str) -> str:
+        return _reject_prohibited_prose(value)
+
+    @field_validator("summary_items", "insight_items")
+    @classmethod
+    def validate_prose_items(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not value or len(value) > 500:
+                raise ValueError("prose items must contain 1 to 500 characters")
+            _reject_prohibited_prose(value)
+        return values
+
+
 class EditorContentError(ValueError):
     """A recoverable model-content failure."""
 
@@ -243,6 +308,12 @@ class EditorContentError(ValueError):
 def _require_timezone(value: datetime, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must include a timezone offset")
+    return value
+
+
+def _reject_prohibited_prose(value: str) -> str:
+    if PROHIBITED_PROSE_RE.search(value):
+        raise ValueError("prose must not contain URLs or links")
     return value
 
 
@@ -323,18 +394,27 @@ def write_newsletter(
     if not trends_file.trends:
         markdown = _empty_newsletter(trends_file.topic)
         actual_model = "deterministic-empty"
+        selected_urls: set[str] = set()
     else:
-        markdown, actual_model = _generate_valid_newsletter(
+        draft, actual_model = _generate_valid_draft(
             trends_file,
             topic_articles=topic_articles,
             model=model,
             fallback_model=fallback_model,
             client=client,
-            known_urls=known_urls,
             run_id=selected_run_id,
             ai_state_path=selected_ai_state_path,
         )
+        markdown = render_newsletter(draft, trends_file, topic_articles)
+        selected_urls = _selected_article_urls(draft, topic_articles)
     markdown = validate_markdown(normalize_markdown(markdown), known_urls=known_urls)
+    _validate_rendered_urls_exact(markdown, known_urls=selected_urls)
+
+    if trends_file.trends:
+        _atomic_write_text(
+            selected_state_path / "editor_draft.json",
+            draft.model_dump_json(indent=2) + "\n",
+        )
 
     _write_candidate_and_checkpoint(
         markdown=markdown,
@@ -472,6 +552,15 @@ def validate_markdown(markdown: str, *, known_urls: set[str]) -> str:
     return markdown
 
 
+def _validate_rendered_urls_exact(markdown: str, *, known_urls: set[str]) -> None:
+    unknown_urls = sorted(_extract_article_urls(markdown) - known_urls)
+    if unknown_urls:
+        raise ValueError(
+            "Rendered Markdown contains non-canonical article URLs: "
+            + ", ".join(unknown_urls)
+        )
+
+
 def _extract_article_urls(markdown: str) -> set[str]:
     """Extract inline-link destinations and bare URLs without regex truncation."""
 
@@ -589,7 +678,7 @@ def _unescape_markdown(value: str) -> str:
 
 
 def _normalize_url_for_allowlist(url: str) -> str:
-    """Normalize URL components whose syntax is case-insensitive."""
+    """Normalize only URL components whose syntax is case-insensitive."""
 
     match = re.match(
         r"^(?P<scheme>https?)://(?P<authority>[^/?#]*)(?P<rest>.*)$",
@@ -672,7 +761,7 @@ def _bold_heading(match: re.Match[str]) -> str:
     return f"**{heading}**"
 
 
-def _request_newsletter(
+def _request_draft(
     trends_file: TrendsFile,
     *,
     topic_articles: list[TopicArticle],
@@ -682,14 +771,18 @@ def _request_newsletter(
     policy_primary_model: str,
     run_id: str,
     ai_state_path: Path,
-) -> tuple[str, str, GenerationResult]:
+    validation_feedback: str | None = None,
+) -> tuple[dict[str, Any], str, GenerationResult]:
+    payload = _build_input_payload(trends_file, topic_articles)
+    if validation_feedback is not None:
+        payload["validation_feedback"] = validation_feedback
     generation = generate_content_with_fallback(
         primary_model=model,
         fallback_model=fallback_model,
         contents=[
             _build_system_prompt(trends_file.topic),
             json.dumps(
-                _build_input_payload(trends_file, topic_articles),
+                payload,
                 ensure_ascii=False,
                 indent=2,
             ),
@@ -697,6 +790,8 @@ def _request_newsletter(
         config={
             "temperature": GENERATION_TEMPERATURE,
             "max_output_tokens": MAX_OUTPUT_TOKENS,
+            "response_mime_type": "application/json",
+            "response_json_schema": _draft_response_schema(),
         },
         client=client,
         run_id=run_id,
@@ -710,30 +805,36 @@ def _request_newsletter(
 
     content = getattr(response, "text", None)
     if not content:
-        raise EditorContentError("Editor model returned empty Markdown.")
-    return str(content), generation.model, generation
+        raise EditorContentError("empty_response")
+    try:
+        payload = json.loads(str(content))
+    except json.JSONDecodeError:
+        raise EditorContentError("invalid_json") from None
+    if not isinstance(payload, dict):
+        raise EditorContentError("invalid_json")
+    return payload, generation.model, generation
 
 
-def _generate_valid_newsletter(
+def _generate_valid_draft(
     trends_file: TrendsFile,
     *,
     topic_articles: list[TopicArticle],
     model: str,
     fallback_model: str,
     client: Any | None,
-    known_urls: set[str],
     run_id: str,
     ai_state_path: Path,
-) -> tuple[str, str]:
+) -> tuple[EditorDraft, str]:
     """Retry one content failure, then make one explicit fallback attempt."""
 
     last_error: ValueError | None = None
     requested_models = [model] * MAX_CONTENT_ATTEMPTS
     if fallback_model != model:
         requested_models.append(fallback_model)
+    validation_feedback: str | None = None
     for requested_model in requested_models:
         try:
-            raw_markdown, actual_model, generation = _request_newsletter(
+            payload, actual_model, generation = _request_draft(
                 trends_file,
                 topic_articles=topic_articles,
                 model=requested_model,
@@ -742,20 +843,152 @@ def _generate_valid_newsletter(
                 policy_primary_model=model,
                 run_id=run_id,
                 ai_state_path=ai_state_path,
+                validation_feedback=validation_feedback,
             )
         except EditorContentError as error:
             last_error = error
+            validation_feedback = str(error)
             continue
         try:
-            markdown = normalize_markdown(raw_markdown)
-            validated = validate_markdown(markdown, known_urls=known_urls)
+            runtime_fields = {"schema_version", "topic", "generated_at"}
+            if runtime_fields.intersection(payload):
+                raise EditorContentError("runtime_owned_fields")
+            draft = EditorDraft.model_validate(
+                {
+                    **payload,
+                    "schema_version": SCHEMA_VERSION,
+                    "topic": trends_file.topic,
+                    "generated_at": datetime.now(UTC),
+                }
+            )
+            _validate_draft_references(draft, trends_file, topic_articles)
             accept = getattr(generation, "accept", None)
             if callable(accept):
                 accept()
-            return validated, actual_model
-        except ValueError as error:
+            return draft, actual_model
+        except (ValidationError, ValueError) as error:
             last_error = error
-    raise ValueError("Editor generation failed content validation.") from last_error
+            validation_feedback = _draft_validation_feedback(error)
+    raise ValueError("Editor draft generation failed content validation.") from last_error
+
+
+def _draft_response_schema() -> dict[str, Any]:
+    """Gemini response schema without runtime-owned envelope fields."""
+
+    schema = EditorDraft.model_json_schema()
+    properties = schema["properties"]
+    for field in ("schema_version", "topic", "generated_at"):
+        properties.pop(field, None)
+    schema["required"] = [
+        field
+        for field in schema["required"]
+        if field not in {"schema_version", "topic", "generated_at"}
+    ]
+    return schema
+
+
+def _validate_draft_references(
+    draft: EditorDraft,
+    trends_file: TrendsFile,
+    articles: list[TopicArticle],
+) -> None:
+    trends_by_id = {trend.id: trend for trend in trends_file.trends}
+    article_ids = {article.id for article in articles}
+    section_ids = [section.trend_id for section in draft.trend_sections]
+    if len(section_ids) != len(set(section_ids)):
+        raise EditorContentError("duplicate_trend_ids")
+    for section in draft.trend_sections:
+        trend = trends_by_id.get(section.trend_id)
+        if trend is None:
+            raise EditorContentError(f"unknown_trend_id:{section.trend_id}")
+        for article_id in section.article_ids:
+            if article_id not in article_ids:
+                raise EditorContentError(f"unknown_article_id:{article_id}")
+            if article_id not in trend.article_ids:
+                raise EditorContentError(
+                    f"misplaced_article_id:{section.trend_id}:{article_id}"
+                )
+
+
+def _draft_validation_feedback(error: Exception) -> str:
+    """Return corrective feedback without prose, URLs, or raw model output."""
+
+    if isinstance(error, EditorContentError):
+        return str(error)
+    if isinstance(error, ValidationError):
+        fields = sorted(
+            {
+                ".".join(str(part) for part in failure["loc"])
+                for failure in error.errors(include_input=False, include_url=False)
+            }
+        )
+        return "invalid_fields:" + ",".join(fields)
+    return "invalid_draft"
+
+
+def render_newsletter(
+    draft: EditorDraft,
+    trends_file: TrendsFile,
+    articles: list[TopicArticle],
+) -> str:
+    """Render a validated draft using only contract-owned article URLs."""
+
+    _validate_draft_references(draft, trends_file, articles)
+    articles_by_id = {article.id: article for article in articles}
+    lines = [
+        f"# 🗞️ {draft.title}",
+        "",
+        "## 🔎 핵심 요약",
+        "",
+        *[f"- {item}" for item in draft.summary_items],
+        "",
+        "## 📌 주요 트렌드",
+    ]
+    for index, section in enumerate(draft.trend_sections, start=1):
+        lines.extend(
+            [
+                "",
+                f"### {index}. {section.heading}",
+                "",
+                section.overview,
+                "",
+                "**왜 중요한가**",
+                f"- {section.why_it_matters}",
+                "",
+                "**관련 글**",
+            ]
+        )
+        for article_id in section.article_ids:
+            article = articles_by_id[article_id]
+            lines.append(
+                f"- 🔗 [{_escape_link_label(article.title)}]"
+                f"({article.canonical_url})"
+            )
+    lines.extend(
+        [
+            "",
+            "## 💡 이번 주 인사이트",
+            "",
+            *[f"- {item}" for item in draft.insight_items],
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _selected_article_urls(
+    draft: EditorDraft,
+    articles: list[TopicArticle],
+) -> set[str]:
+    articles_by_id = {article.id: article for article in articles}
+    return {
+        articles_by_id[article_id].canonical_url
+        for section in draft.trend_sections
+        for article_id in section.article_ids
+    }
+
+
+def _escape_link_label(value: str) -> str:
+    return re.sub(r"([\\\[\]])", r"\\\1", value).replace("\n", " ")
 
 
 def _build_system_prompt(topic: str) -> str:
@@ -774,14 +1007,11 @@ def _universal_editor_rules(prefix: str | None = None) -> str:
         "Keep technical names in English. Summarize trends, summarize supplied "
         "articles, generate weekly insights, and explain why each trend matters. "
         "Do not fully translate articles. Do not fabricate information. If "
-        "article metadata is missing, do not invent titles, URLs, dates, or "
-        "claims. Return Markdown only with no JSON, no front matter, and no "
-        "code fence. Never use '---' horizontal rules. Use '━━━━━━━━━━━━━━━━━━━━' "
-        "for a visual divider. Never use level-four headings starting with "
-        "'####'; use bold text instead. Include a level-one title and the exact "
-        "level-two sections '핵심 요약', '주요 트렌드', and '이번 주 인사이트'. "
-        "Use only supplied canonical article URLs and stay within 12,000 "
-        "characters."
+        "article metadata is missing, do not invent titles, dates, or claims. "
+        "Return one JSON object matching the supplied schema. Never emit or "
+        "reconstruct a URL, Markdown link, HTML link, article title, timestamp, "
+        "schema version, or topic. Reference sources only by their exact article "
+        "IDs and keep each article within its referenced trend."
     )
     if prefix is None:
         return rules
@@ -794,8 +1024,7 @@ def _build_input_payload(
 ) -> dict[str, Any]:
     articles_by_id = {article.id: article for article in topic_articles}
     payload: dict[str, Any] = {
-        "task": "write Korean newsletter Markdown",
-        "schema_version": SCHEMA_VERSION,
+        "task": "write a Korean newsletter draft as JSON",
         "topic": trends_file.topic,
         "period": (
             trends_file.period.model_dump(mode="json")
@@ -815,27 +1044,18 @@ def _build_input_payload(
                     for article_id in trend.article_ids
                     if article_id in articles_by_id
                 ],
-                "article_ids_without_metadata": [
-                    article_id
-                    for article_id in trend.article_ids
-                    if article_id not in articles_by_id
-                ],
             }
             for trend in trends_file.trends
         ],
         "requirements": [
             "Write natural Korean.",
             "Keep technical names in English.",
-            "Output Markdown only.",
+            "Output JSON only and omit schema_version, topic, and generated_at.",
             "Summarize trends and explain why they matter.",
             "Summarize supplied article metadata without fully translating articles.",
             "Generate weekly insights based only on supplied trend and article data.",
-            "Do not fabricate missing article titles, URLs, dates, or source details.",
-            "Cite original article URLs whenever URL metadata is supplied.",
-            "Use '━━━━━━━━━━━━━━━━━━━━' instead of '---' for visual dividers.",
-            "Use bold text instead of level-four headings starting with '####'.",
-            "Include title, 핵심 요약, 주요 트렌드, and 이번 주 인사이트 sections.",
-            "Keep the complete output within 12,000 characters.",
+            "Do not emit URLs, links, article titles, or unknown IDs.",
+            "Select article IDs only from the corresponding trend.",
         ],
     }
     return payload
@@ -846,7 +1066,6 @@ def _article_payload(article: TopicArticle) -> dict[str, Any]:
         "id": article.id,
         "source": article.source,
         "title": article.title,
-        "canonical_url": article.canonical_url,
         "published_at": (
             article.published_at.isoformat()
             if article.published_at is not None
@@ -911,10 +1130,13 @@ def _validate_article_references(
     trends_file: TrendsFile,
     articles: list[TopicArticle],
 ) -> None:
-    if not articles:
-        return
-
-    article_ids = {article.id for article in articles}
+    article_id_list = [article.id for article in articles]
+    if len(article_id_list) != len(set(article_id_list)):
+        raise ValueError("topic_articles contains duplicate article IDs")
+    trend_id_list = [trend.id for trend in trends_file.trends]
+    if len(trend_id_list) != len(set(trend_id_list)):
+        raise ValueError("trends contains duplicate trend IDs")
+    article_ids = set(article_id_list)
     for trend in trends_file.trends:
         missing_ids = sorted(set(trend.article_ids) - article_ids)
         if missing_ids:
@@ -980,7 +1202,7 @@ def _load_valid_candidate(
         return None
     try:
         checkpoint = EditorGenerationCheckpoint.model_validate_json(
-            checkpoint_path.read_text(encoding="utf-8")
+            checkpoint_path.read_bytes()
         )
         candidate = candidate_path.read_text(encoding="utf-8")
         if (
@@ -1005,7 +1227,15 @@ def _policy_fingerprint(
     resolved_fallback = fallback_model or DEFAULT_FALLBACK_MODEL
     policy = {
         "checkpoint_schema_version": SCHEMA_VERSION,
-        "validation_version": "2",
+        "validation_version": "3",
+        "editor_draft_schema": EditorDraft.model_json_schema(),
+        "renderer_policy": "editor-draft-to-newsletter-v1",
+        "newsletter_contract": {
+            "required_sections": VALIDATED_SECTIONS,
+            "divider": DISCORD_DIVIDER,
+            "links_from_canonical_url_only": True,
+        },
+        "contract_documents": _editor_contract_documents(),
         "prompt": _build_system_prompt(topic),
         "models": {
             "primary": model,
@@ -1029,6 +1259,15 @@ def _policy_fingerprint(
     return _fingerprint(
         json.dumps(policy, ensure_ascii=False, sort_keys=True).encode("utf-8")
     )
+
+
+def _editor_contract_documents() -> dict[str, str]:
+    contract_directory = Path(__file__).resolve().parents[4] / "docs" / "contracts"
+    names = ("editor_draft.md", "editor_draft.schema.json", "newsletter.md")
+    return {
+        name: (contract_directory / name).read_text(encoding="utf-8")
+        for name in names
+    }
 
 
 def editor_policy_fingerprint(

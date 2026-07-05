@@ -25,6 +25,8 @@ Internal processing contracts:
 
 - `json_artifact_validation.md`: strict Pydantic validation rules for JSON
   artifacts, temporal fields, and pipeline output checks.
+- `editor_draft.md` and `editor_draft.schema.json`: URL-free AI editorial
+  draft and deterministic article-ID-to-link rendering boundary.
 - `tagger_batch_processing.md`: adaptive Tagger batching, checkpointing, and
   resume rules.
 - `tagger_batch_checkpoint.schema.json`: completed Tagger batch checkpoint
