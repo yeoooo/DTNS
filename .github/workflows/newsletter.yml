@@ -3,7 +3,8 @@ name: Weekly Newsletter
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 0 * * 6"
+    # GitHub Actions cron uses UTC: Monday 00:00 UTC = Monday 09:00 KST.
+    - cron: "0 0 * * 1"
 
 jobs:
   publish:

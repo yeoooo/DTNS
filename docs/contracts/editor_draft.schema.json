@@ -19,7 +19,7 @@
       "enum": ["technology", "backend", "qa"]
     },
     "generated_at": { "type": "string", "format": "date-time" },
-    "title": { "$ref": "#/$defs/prose160" },
+    "title": { "$ref": "#/$defs/plainHeading160" },
     "summary_items": {
       "type": "array",
       "items": { "$ref": "#/$defs/prose500" },
@@ -46,11 +46,11 @@
       "maxLength": 120,
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
     },
-    "prose160": {
+    "plainHeading160": {
       "type": "string",
       "minLength": 1,
       "maxLength": 160,
-      "pattern": "^(?:(?!https?://|\\]\\s*\\(|<a\\s|<https?://)[\\s\\S])*$"
+      "pattern": "^(?!\\s)(?!.*\\s$)(?:(?![\\r\\n#]|https?://|\\]\\s*\\(|<[^>]*>)[\\s\\S])+$"
     },
     "prose500": {
       "type": "string",
@@ -69,7 +69,7 @@
       ],
       "properties": {
         "trend_id": { "$ref": "#/$defs/id" },
-        "heading": { "$ref": "#/$defs/prose160" },
+        "heading": { "$ref": "#/$defs/plainHeading160" },
         "overview": { "$ref": "#/$defs/prose500" },
         "why_it_matters": { "$ref": "#/$defs/prose500" },
         "article_ids": {

@@ -73,12 +73,45 @@ The model must not produce:
 
 - URLs or URL-like Markdown destinations
 - article titles to be used as link labels
-- Markdown links, HTML links, or autolinks
+- Markdown syntax, HTML, links, or autolinks
+- emoji, section markers, list markers, or heading markers
 - unknown trend IDs or article IDs
 - deterministic fields such as timestamps, fingerprints, or model names
 
 Runtime code supplies the envelope fields `schema_version`, `topic`, and
 `generated_at` after validating the model response.
+
+### Plain-text Invariant
+
+Every AI-authored prose field is plain text. AI output contains editorial
+meaning only; it never contains presentation syntax. In particular:
+
+- `title` and `heading` are trimmed, non-empty, single-line strings.
+- `title` and `heading` must not start with or contain Markdown heading markers,
+  list markers, HTML, links, or emoji.
+- `summary_items`, `overview`, `why_it_matters`, and `insight_items` must not
+  contain Markdown headings, Markdown lists, HTML, links, or emoji.
+- A newline used to introduce a Markdown block is prohibited. The renderer,
+  rather than model prose, owns document structure.
+
+The title value is the human-readable title only:
+
+```text
+주간 QA 및 품질 엔지니어링 리포트
+```
+
+These values are invalid:
+
+```text
+# 🗞️ 주간 QA 및 품질 엔지니어링 리포트
+🗞️ 주간 QA 및 품질 엔지니어링 리포트
+# 주간 QA 및 품질 엔지니어링 리포트
+[주간 QA 리포트](https://example.com)
+```
+
+JSON Schema provides structural and basic lexical checks. Runtime validation
+must additionally perform Unicode-aware emoji detection and reject prohibited
+Markdown block syntax. Passing the schema alone is not sufficient acceptance.
 
 ## Reference Validation
 
@@ -92,7 +125,9 @@ following:
 5. Article IDs are unique within each trend section.
 6. All prose fields contain no HTTP(S) URL, Markdown link destination, HTML
    link, or autolink.
-7. The response satisfies `editor_draft.schema.json` and configured size
+7. All prose fields satisfy the plain-text invariant, including Unicode-aware
+   emoji and Markdown block-syntax rejection.
+8. The response satisfies `editor_draft.schema.json` and configured size
    limits.
 
 Unknown or misplaced IDs are content-validation failures. They must never be
@@ -102,7 +137,10 @@ silently mapped to a similar ID or URL.
 
 The renderer builds Markdown without AI calls:
 
-- fixed section headings come from the newsletter contract
+- the H1 marker, title emoji, and fixed section headings come from the
+  newsletter contract
+- trend numbering, importance emoji, list markers, and minor labels are
+  selected deterministically by runtime code
 - prose comes from the validated draft
 - trend ordering follows the draft after validating it against input trends
 - each `article_id` is looked up in `<topic>_articles.json`
@@ -122,11 +160,29 @@ article_id
 The renderer must not normalize, guess, repair, redirect, or synthesize a URL.
 URL canonicalization remains the Preprocessor's responsibility.
 
+The renderer is the exclusive owner of all Markdown and emoji. It must not
+preserve, strip, or repair presentation syntax received from AI because such a
+draft must already have failed validation. For a valid title, rendering is
+exactly:
+
+```text
+draft.title = "주간 QA 및 품질 엔지니어링 리포트"
+rendered H1 = "# 🗞️ 주간 QA 및 품질 엔지니어링 리포트"
+```
+
 ## Final Validation
 
 After rendering, the existing newsletter contract still applies. The Editor
 must validate required sections, Korean body content, Discord length, and the
 absence of unsupported Markdown constructs.
+
+Final shape validation must also require:
+
+- exactly one level-one heading
+- the first line matches `^# 🗞️ [^#\r\n]+$`
+- the title emoji `🗞️` occurs exactly once in the document
+- each required level-two section occurs exactly once
+- no AI prose value becomes an ATX heading or Markdown list block
 
 As a defense in depth check, every URL extracted from the final Markdown must
 exactly match a `canonical_url` selected through a validated article ID. A URL
@@ -136,7 +192,7 @@ AI content error.
 ## Retry And Recovery
 
 - Invalid JSON, schema violations, unknown IDs, misplaced IDs, and prohibited
-  URL content are recoverable AI content failures.
+  URL, Markdown, HTML, or emoji content are recoverable AI content failures.
 - Retry once with validation feedback containing IDs only; do not add URLs to
   the corrective prompt.
 - The configured fallback model may be attempted after retry exhaustion.
@@ -156,3 +212,24 @@ The Editor policy fingerprint must cover:
 
 A stored draft is reusable only when topic, input fingerprints, and policy
 fingerprint match the current run.
+
+## Required Conformance Cases
+
+Implementations must include regression tests proving:
+
+```text
+title "# 🗞️ 제목"       -> reject
+title "🗞️ 제목"         -> reject
+title "# 제목"           -> reject
+title "제목\n부제"       -> reject
+title "[제목](...)"      -> reject
+title "<b>제목</b>"      -> reject
+title "정상적인 제목"    -> render as "# 🗞️ 정상적인 제목"
+```
+
+The governing invariant is:
+
+```text
+AI output contains no presentation syntax.
+Only renderer output contains Markdown, emoji, article titles, and URLs.
+```

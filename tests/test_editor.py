@@ -60,7 +60,7 @@ def _draft_response(*, article_id="article-0", trend_id="trend-0"):
             "trend_sections": [
                 {
                     "trend_id": trend_id,
-                    "heading": "🚀 핵심 변화",
+                    "heading": "핵심 변화",
                     "overview": "개발 생태계의 주요 변화를 설명합니다.",
                     "why_it_matters": "개발자와 운영 팀의 대응이 필요합니다.",
                     "article_ids": [article_id],
@@ -527,7 +527,7 @@ def test_editor_does_not_store_draft_before_markdown_validation(
     _write_articles(articles_path)
     monkeypatch.setattr(runner, "render_newsletter", lambda *_: "invalid")
 
-    with pytest.raises(ValueError, match="missing required sections"):
+    with pytest.raises(ValueError, match="valid title heading"):
         write_newsletter(
             trends_path,
             tmp_path / "technology_newsletter.md",
@@ -641,6 +641,115 @@ def test_policy_fingerprint_changes_with_contract_documents(monkeypatch):
     )
 
     assert runner.editor_policy_fingerprint("technology", model="model") != first
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "# 🗞️ 제목",
+        "🗞️ 제목",
+        "# 제목",
+        "제목\n부제",
+        "[제목](https://example.com)",
+        "<b>제목</b>",
+    ],
+)
+def test_editor_draft_rejects_presentation_syntax_in_title(title):
+    with pytest.raises(ValueError):
+        runner.EditorDraft(
+            topic="technology",
+            generated_at=datetime(2026, 6, 25, tzinfo=UTC),
+            title=title,
+            summary_items=["핵심 요약입니다."],
+            trend_sections=[
+                runner.DraftTrendSection(
+                    trend_id="trend-0",
+                    heading="핵심 변화",
+                    overview="변화를 설명합니다.",
+                    why_it_matters="중요한 변화입니다.",
+                    article_ids=["article-0"],
+                )
+            ],
+            insight_items=["계속 관찰합니다."],
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("heading", "🧭 핵심 변화"),
+        ("overview", "- 목록으로 설명합니다."),
+        ("why_it_matters", "<strong>중요합니다.</strong>"),
+        ("overview", "첫 문장\n## 새 구역"),
+        ("overview", "---"),
+        ("overview", "관련 [문서][reference]를 확인합니다."),
+        ("overview", "관련 ![이미지][diagram]을 확인합니다."),
+    ],
+)
+def test_editor_draft_rejects_presentation_syntax_in_all_prose(field, value):
+    section = {
+        "trend_id": "trend-0",
+        "heading": "핵심 변화",
+        "overview": "변화를 설명합니다.",
+        "why_it_matters": "중요한 변화입니다.",
+        "article_ids": ["article-0"],
+        field: value,
+    }
+
+    with pytest.raises(ValueError):
+        runner.DraftTrendSection(**section)
+
+
+def test_renderer_owns_title_and_importance_presentation():
+    now = datetime(2026, 6, 25, tzinfo=UTC)
+    trends = runner.TrendsFile(
+        schema_version="1.0",
+        generated_at=now,
+        topic="technology",
+        trends=[
+            runner.Trend(
+                id="trend-0",
+                title="입력 제목",
+                importance="medium",
+                summary="요약",
+                why_it_matters="중요성",
+                article_ids=["article-0"],
+            )
+        ],
+    )
+    article = runner.TopicArticle(
+        id="article-0",
+        source="example",
+        title="Article",
+        canonical_url="https://example.com/article-0",
+        published_at=None,
+        tags=[],
+        technologies=[],
+        domains=[],
+        ai_metadata=runner.AIMetadata(model="model", confidence=1.0),
+        classification=runner.ClassificationMetadata(matched_rules=[]),
+    )
+    draft = runner.EditorDraft(
+        topic="technology",
+        generated_at=now,
+        title="정상적인 제목",
+        summary_items=["핵심 요약입니다."],
+        trend_sections=[
+            runner.DraftTrendSection(
+                trend_id="trend-0",
+                heading="핵심 변화",
+                overview="변화를 설명합니다.",
+                why_it_matters="중요한 변화입니다.",
+                article_ids=["article-0"],
+            )
+        ],
+        insight_items=["계속 관찰합니다."],
+    )
+
+    markdown = runner.render_newsletter(draft, trends, [article])
+
+    assert markdown.startswith("# 🗞️ 정상적인 제목\n")
+    assert "### 1. 🧭 핵심 변화" in markdown
 
 
 def test_atomic_write_fsyncs_file_and_parent_directory(tmp_path, monkeypatch):

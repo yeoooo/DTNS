@@ -68,6 +68,14 @@ URL_START_RE = re.compile(r"https?://", re.IGNORECASE)
 PROHIBITED_PROSE_RE = re.compile(
     r"https?://|\]\s*\(|<a\s|<https?://", re.IGNORECASE
 )
+HTML_TAG_RE = re.compile(r"<[^>]*>")
+MARKDOWN_BLOCK_RE = re.compile(r"^\s*(?:#{1,6}\s|[-+*>]\s|\d+[.)]\s)")
+INLINE_MARKDOWN_RE = re.compile(r"[*_~`]")
+HORIZONTAL_RULE_PROSE_RE = re.compile(r"^\s*-{3,}\s*$")
+REFERENCE_LINK_RE = re.compile(r"!?\[[^\]\r\n]+\]\[[^\]\r\n]*\]")
+PLAIN_HEADING_PATTERN = (
+    r"^(?!\s)(?!.*\s$)(?:(?![\r\n#]|https?://|\]\s*\(|<[^>]*>)[\s\S])+$"
+)
 FRONT_MATTER_RE = re.compile(r"\A\s*---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 SECTION_PATTERNS = {
     "title": re.compile(r"^#\s+\S+", re.MULTILINE),
@@ -247,15 +255,24 @@ class DraftTrendSection(BaseModel):
         max_length=120,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
-    heading: str = Field(min_length=1, max_length=160)
+    heading: str = Field(
+        min_length=1,
+        max_length=160,
+        json_schema_extra={"pattern": PLAIN_HEADING_PATTERN},
+    )
     overview: str = Field(min_length=1, max_length=500)
     why_it_matters: str = Field(min_length=1, max_length=500)
     article_ids: list[str] = Field(min_length=1, max_length=20)
 
-    @field_validator("heading", "overview", "why_it_matters")
+    @field_validator("heading")
     @classmethod
-    def reject_links(cls, value: str) -> str:
-        return _reject_prohibited_prose(value)
+    def validate_heading(cls, value: str) -> str:
+        return _reject_plain_heading(value)
+
+    @field_validator("overview", "why_it_matters")
+    @classmethod
+    def reject_presentation_syntax(cls, value: str) -> str:
+        return _reject_plain_text(value)
 
     @field_validator("article_ids")
     @classmethod
@@ -276,7 +293,11 @@ class EditorDraft(BaseModel):
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     topic: Literal["technology", "backend", "qa"]
     generated_at: datetime
-    title: str = Field(min_length=1, max_length=160)
+    title: str = Field(
+        min_length=1,
+        max_length=160,
+        json_schema_extra={"pattern": PLAIN_HEADING_PATTERN},
+    )
     summary_items: list[str] = Field(min_length=1, max_length=5)
     trend_sections: list[DraftTrendSection] = Field(min_length=1, max_length=8)
     insight_items: list[str] = Field(min_length=1, max_length=5)
@@ -289,7 +310,7 @@ class EditorDraft(BaseModel):
     @field_validator("title")
     @classmethod
     def validate_title(cls, value: str) -> str:
-        return _reject_prohibited_prose(value)
+        return _reject_plain_heading(value)
 
     @field_validator("summary_items", "insight_items")
     @classmethod
@@ -297,7 +318,7 @@ class EditorDraft(BaseModel):
         for value in values:
             if not value or len(value) > 500:
                 raise ValueError("prose items must contain 1 to 500 characters")
-            _reject_prohibited_prose(value)
+            _reject_plain_text(value)
         return values
 
 
@@ -311,10 +332,58 @@ def _require_timezone(value: datetime, field_name: str) -> datetime:
     return value
 
 
-def _reject_prohibited_prose(value: str) -> str:
-    if PROHIBITED_PROSE_RE.search(value):
-        raise ValueError("prose must not contain URLs or links")
+def _reject_plain_text(value: str) -> str:
+    if value != value.strip():
+        raise ValueError("prose must not have leading or trailing whitespace")
+    if "\r" in value or "\n" in value:
+        raise ValueError("prose must be a single line")
+    if PROHIBITED_PROSE_RE.search(value) or HTML_TAG_RE.search(value):
+        raise ValueError("prose must not contain URLs, links, or HTML")
+    if (
+        MARKDOWN_BLOCK_RE.search(value)
+        or INLINE_MARKDOWN_RE.search(value)
+        or HORIZONTAL_RULE_PROSE_RE.search(value)
+        or REFERENCE_LINK_RE.search(value)
+    ):
+        raise ValueError("prose must not contain Markdown syntax")
+    if _contains_emoji(value):
+        raise ValueError("prose must not contain emoji")
     return value
+
+
+def _reject_plain_heading(value: str) -> str:
+    _reject_plain_text(value)
+    if "#" in value:
+        raise ValueError("title and heading must not contain heading markers")
+    return value
+
+
+def _contains_emoji(value: str) -> bool:
+    emoji_ranges = (
+        (0x1F1E6, 0x1F1FF),
+        (0x1F300, 0x1FAFF),
+        (0x2600, 0x27BF),
+    )
+    emoji_codepoints = {
+        0x00A9,
+        0x00AE,
+        0x200D,
+        0x203C,
+        0x2049,
+        0x20E3,
+        0x2122,
+        0x2139,
+        0x3030,
+        0x303D,
+        0x3297,
+        0x3299,
+        0xFE0F,
+    }
+    return any(
+        codepoint in emoji_codepoints
+        or any(start <= codepoint <= end for start, end in emoji_ranges)
+        for codepoint in map(ord, value)
+    )
 
 
 def write_newsletter(
@@ -526,9 +595,15 @@ def validate_markdown(markdown: str, *, known_urls: set[str]) -> str:
 
     if not markdown or len(markdown) > MAX_CHARACTERS:
         raise ValueError("Editor Markdown must contain 1 to 12,000 characters.")
+    h1_headings = re.findall(r"^#\s+.*$", markdown, re.MULTILINE)
+    first_line = markdown.splitlines()[0]
+    if len(h1_headings) != 1 or re.fullmatch(r"# 🗞️ [^#\r\n]+", first_line) is None:
+        raise ValueError("Editor Markdown must contain exactly one valid title heading.")
+    if markdown.count("🗞️") != 1:
+        raise ValueError("Editor Markdown must contain the title emoji exactly once.")
     missing = [
         section for section, pattern in SECTION_PATTERNS.items()
-        if pattern.search(markdown) is None
+        if len(pattern.findall(markdown)) != 1
     ]
     if missing:
         raise ValueError(
@@ -935,6 +1010,7 @@ def render_newsletter(
 
     _validate_draft_references(draft, trends_file, articles)
     articles_by_id = {article.id: article for article in articles}
+    trends_by_id = {trend.id: trend for trend in trends_file.trends}
     lines = [
         f"# 🗞️ {draft.title}",
         "",
@@ -945,10 +1021,15 @@ def render_newsletter(
         "## 📌 주요 트렌드",
     ]
     for index, section in enumerate(draft.trend_sections, start=1):
+        importance_emoji = {
+            "high": "🚀",
+            "medium": "🧭",
+            "low": "🔧",
+        }[trends_by_id[section.trend_id].importance]
         lines.extend(
             [
                 "",
-                f"### {index}. {section.heading}",
+                f"### {index}. {importance_emoji} {section.heading}",
                 "",
                 section.overview,
                 "",
@@ -1009,8 +1090,9 @@ def _universal_editor_rules(prefix: str | None = None) -> str:
         "Do not fully translate articles. Do not fabricate information. If "
         "article metadata is missing, do not invent titles, dates, or claims. "
         "Return one JSON object matching the supplied schema. Never emit or "
-        "reconstruct a URL, Markdown link, HTML link, article title, timestamp, "
-        "schema version, or topic. Reference sources only by their exact article "
+        "reconstruct a URL, Markdown syntax, HTML, emoji, article title, "
+        "timestamp, schema version, or topic. Every prose field must be trimmed, "
+        "single-line plain text. Reference sources only by their exact article "
         "IDs and keep each article within its referenced trend."
     )
     if prefix is None:
@@ -1055,6 +1137,7 @@ def _build_input_payload(
             "Summarize supplied article metadata without fully translating articles.",
             "Generate weekly insights based only on supplied trend and article data.",
             "Do not emit URLs, links, article titles, or unknown IDs.",
+            "Use trimmed single-line plain text without Markdown, HTML, or emoji.",
             "Select article IDs only from the corresponding trend.",
         ],
     }
