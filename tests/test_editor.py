@@ -700,6 +700,58 @@ def test_editor_draft_rejects_presentation_syntax_in_all_prose(field, value):
         runner.DraftTrendSection(**section)
 
 
+@pytest.mark.parametrize("field", ["heading", "overview"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "sched_ext",
+        "snake_case",
+        "한글_sched_ext 식별자",
+    ],
+)
+def test_editor_draft_allows_underscores_inside_technical_identifiers(
+    field,
+    value,
+):
+    section = {
+        "trend_id": "trend-0",
+        "heading": "핵심 변화",
+        "overview": "변화를 설명합니다.",
+        "why_it_matters": "중요한 변화입니다.",
+        "article_ids": ["article-0"],
+        field: value,
+    }
+
+    assert runner.DraftTrendSection(**section)
+
+
+@pytest.mark.parametrize("field", ["heading", "overview"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        "_emphasis_",
+        "__strong__",
+        r"sched\_ext",
+        r"\_emphasis\_",
+        "___",
+        "_ _ _",
+        "“_강조_”",
+    ],
+)
+def test_editor_draft_rejects_underscore_markdown_syntax(field, value):
+    section = {
+        "trend_id": "trend-0",
+        "heading": "핵심 변화",
+        "overview": "변화를 설명합니다.",
+        "why_it_matters": "중요한 변화입니다.",
+        "article_ids": ["article-0"],
+        field: value,
+    }
+
+    with pytest.raises(ValueError):
+        runner.DraftTrendSection(**section)
+
+
 def test_renderer_owns_title_and_importance_presentation():
     now = datetime(2026, 6, 25, tzinfo=UTC)
     trends = runner.TrendsFile(
