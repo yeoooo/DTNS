@@ -48,12 +48,14 @@
     },
     "plainHeading160": {
       "type": "string",
+      "description": "Trimmed single-line plain heading text. Runtime validation rejects presentation syntax and emoji while allowing underscores embedded in technical identifiers.",
       "minLength": 1,
       "maxLength": 160,
       "pattern": "^(?!\\s)(?!.*\\s$)(?:(?![\\r\\n#]|https?://|\\]\\s*\\(|<[^>]*>)[\\s\\S])+$"
     },
     "prose500": {
       "type": "string",
+      "description": "Plain prose without presentation syntax. Runtime validation allows underscores surrounded by word characters, such as sched_ext, but rejects Markdown underscore emphasis delimiters.",
       "minLength": 1,
       "maxLength": 500,
       "pattern": "^(?:(?!https?://|\\]\\s*\\(|<a\\s|<https?://)[\\s\\S])*$"

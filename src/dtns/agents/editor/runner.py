@@ -14,6 +14,7 @@ import json
 import os
 import re
 import tempfile
+import unicodedata
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -70,11 +71,24 @@ PROHIBITED_PROSE_RE = re.compile(
 )
 HTML_TAG_RE = re.compile(r"<[^>]*>")
 MARKDOWN_BLOCK_RE = re.compile(r"^\s*(?:#{1,6}\s|[-+*>]\s|\d+[.)]\s)")
-INLINE_MARKDOWN_RE = re.compile(r"[*_~`]")
-HORIZONTAL_RULE_PROSE_RE = re.compile(r"^\s*-{3,}\s*$")
+INLINE_MARKDOWN_RE = re.compile(r"[*~`]")
+UNDERSCORE_ESCAPE_RE = re.compile(r"\\_")
+HORIZONTAL_RULE_PROSE_RE = re.compile(
+    r"^\s*(?:(?:-\s*){3,}|(?:_\s*){3,}|(?:\*\s*){3,})$"
+)
 REFERENCE_LINK_RE = re.compile(r"!?\[[^\]\r\n]+\]\[[^\]\r\n]*\]")
 PLAIN_HEADING_PATTERN = (
     r"^(?!\s)(?!.*\s$)(?:(?![\r\n#]|https?://|\]\s*\(|<[^>]*>)[\s\S])+$"
+)
+PLAIN_HEADING_DESCRIPTION = (
+    "Trimmed single-line plain heading text. Runtime validation rejects "
+    "presentation syntax and emoji while allowing underscores embedded in "
+    "technical identifiers."
+)
+PLAIN_PROSE_DESCRIPTION = (
+    "Plain prose without presentation syntax. Runtime validation allows "
+    "underscores surrounded by word characters, such as sched_ext, but rejects "
+    "Markdown underscore emphasis delimiters."
 )
 FRONT_MATTER_RE = re.compile(r"\A\s*---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 SECTION_PATTERNS = {
@@ -258,10 +272,19 @@ class DraftTrendSection(BaseModel):
     heading: str = Field(
         min_length=1,
         max_length=160,
+        description=PLAIN_HEADING_DESCRIPTION,
         json_schema_extra={"pattern": PLAIN_HEADING_PATTERN},
     )
-    overview: str = Field(min_length=1, max_length=500)
-    why_it_matters: str = Field(min_length=1, max_length=500)
+    overview: str = Field(
+        min_length=1,
+        max_length=500,
+        description=PLAIN_PROSE_DESCRIPTION,
+    )
+    why_it_matters: str = Field(
+        min_length=1,
+        max_length=500,
+        description=PLAIN_PROSE_DESCRIPTION,
+    )
     article_ids: list[str] = Field(min_length=1, max_length=20)
 
     @field_validator("heading")
@@ -296,11 +319,20 @@ class EditorDraft(BaseModel):
     title: str = Field(
         min_length=1,
         max_length=160,
+        description=PLAIN_HEADING_DESCRIPTION,
         json_schema_extra={"pattern": PLAIN_HEADING_PATTERN},
     )
-    summary_items: list[str] = Field(min_length=1, max_length=5)
+    summary_items: list[str] = Field(
+        min_length=1,
+        max_length=5,
+        description=PLAIN_PROSE_DESCRIPTION,
+    )
     trend_sections: list[DraftTrendSection] = Field(min_length=1, max_length=8)
-    insight_items: list[str] = Field(min_length=1, max_length=5)
+    insight_items: list[str] = Field(
+        min_length=1,
+        max_length=5,
+        description=PLAIN_PROSE_DESCRIPTION,
+    )
 
     @field_validator("generated_at")
     @classmethod
@@ -342,6 +374,8 @@ def _reject_plain_text(value: str) -> str:
     if (
         MARKDOWN_BLOCK_RE.search(value)
         or INLINE_MARKDOWN_RE.search(value)
+        or UNDERSCORE_ESCAPE_RE.search(value)
+        or _contains_underscore_emphasis(value)
         or HORIZONTAL_RULE_PROSE_RE.search(value)
         or REFERENCE_LINK_RE.search(value)
     ):
@@ -349,6 +383,63 @@ def _reject_plain_text(value: str) -> str:
     if _contains_emoji(value):
         raise ValueError("prose must not contain emoji")
     return value
+
+
+def _contains_underscore_emphasis(value: str) -> bool:
+    """Return whether underscore runs can pair as Markdown emphasis delimiters."""
+
+    openers: list[tuple[int, bool]] = []
+    for match in re.finditer(r"_+", value):
+        before = value[match.start() - 1] if match.start() else None
+        after = value[match.end()] if match.end() < len(value) else None
+        before_whitespace = before is None or before.isspace()
+        after_whitespace = after is None or after.isspace()
+        before_punctuation = _is_markdown_punctuation(before)
+        after_punctuation = _is_markdown_punctuation(after)
+
+        left_flanking = not after_whitespace and (
+            not after_punctuation or before_whitespace or before_punctuation
+        )
+        right_flanking = not before_whitespace and (
+            not before_punctuation or after_whitespace or after_punctuation
+        )
+        can_open = left_flanking and (not right_flanking or before_punctuation)
+        can_close = right_flanking and (not left_flanking or after_punctuation)
+        run_length = match.end() - match.start()
+
+        if can_close:
+            for opener_length, opener_can_close in reversed(openers):
+                if _underscore_runs_can_pair(
+                    opener_length,
+                    run_length,
+                    opener_can_close=opener_can_close,
+                    closer_can_open=can_open,
+                ):
+                    return True
+        if can_open:
+            openers.append((run_length, can_close))
+    return False
+
+
+def _is_markdown_punctuation(character: str | None) -> bool:
+    if character is None:
+        return False
+    return unicodedata.category(character)[0] in {"P", "S"}
+
+
+def _underscore_runs_can_pair(
+    opener_length: int,
+    closer_length: int,
+    *,
+    opener_can_close: bool,
+    closer_can_open: bool,
+) -> bool:
+    if not (opener_can_close or closer_can_open):
+        return True
+    total_length = opener_length + closer_length
+    return not (
+        total_length % 3 == 0 and (opener_length % 3 != 0 or closer_length % 3 != 0)
+    )
 
 
 def _reject_plain_heading(value: str) -> str:

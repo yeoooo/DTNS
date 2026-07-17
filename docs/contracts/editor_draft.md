@@ -91,6 +91,11 @@ meaning only; it never contains presentation syntax. In particular:
   list markers, HTML, links, or emoji.
 - `summary_items`, `overview`, `why_it_matters`, and `insight_items` must not
   contain Markdown headings, Markdown lists, HTML, links, or emoji.
+- Characters that can participate in Markdown are prohibited only when they
+  form presentation syntax. An underscore surrounded by word characters is
+  part of a technical identifier and is valid plain text; for example,
+  `sched_ext`, `snake_case`, and `some_identifier` are valid. Underscore
+  emphasis markers such as `_emphasis_` and `__strong__` remain invalid.
 - A newline used to introduce a Markdown block is prohibited. The renderer,
   rather than model prose, owns document structure.
 
@@ -98,6 +103,12 @@ The title value is the human-readable title only:
 
 ```text
 주간 QA 및 품질 엔지니어링 리포트
+```
+
+Technical identifiers remain unchanged in otherwise plain prose:
+
+```text
+eBPF와 sched_ext 도입 사례가 늘고 있습니다.
 ```
 
 These values are invalid:
@@ -126,7 +137,9 @@ following:
 6. All prose fields contain no HTTP(S) URL, Markdown link destination, HTML
    link, or autolink.
 7. All prose fields satisfy the plain-text invariant, including Unicode-aware
-   emoji and Markdown block-syntax rejection.
+   emoji and Markdown block-syntax rejection. Validation must distinguish
+   Markdown delimiters from characters embedded in technical identifiers and
+   must not reject an identifier solely because it contains `_`.
 8. The response satisfies `editor_draft.schema.json` and configured size
    limits.
 
