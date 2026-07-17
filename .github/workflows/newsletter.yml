@@ -2,9 +2,10 @@ name: Weekly Newsletter
 
 on:
   workflow_dispatch:
-  schedule:
-    # GitHub Actions cron uses UTC: Monday 08:45 KST = Sunday 23:45 UTC.
-    - cron: "45 23 * * 1"
+    
+permissions:
+  contents: read
+  
 jobs:
   publish:
     runs-on: ubuntu-latest
