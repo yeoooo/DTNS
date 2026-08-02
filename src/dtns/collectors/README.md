@@ -15,5 +15,7 @@ Expected sources:
 - InfoQ
 - OSS Insight
 - GitHub Releases
+- GitHub Trending (weekly)
 - Engineering blogs
 - Official project blogs
+- QA publications and communities

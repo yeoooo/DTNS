@@ -10,10 +10,13 @@ from jsonschema import Draft202012Validator
 from dtns.collectors import runner
 from dtns.collectors.sources import (
     FeedSource,
+    HtmlSource,
     InvalidFeedError,
     _parse_feed,
+    default_html_sources,
     default_feed_sources,
     default_github_release_sources,
+    fetch_html_articles,
 )
 
 
@@ -29,7 +32,9 @@ EXPECTED_FEED_URLS = {
     "https://kubernetes.io/feed.xml",
     "https://opentelemetry.io/blog/index.xml",
     "https://dev.to/feed/playwright",
+    "https://softwaretestingweekly.com/issues/rss/",
     "https://www.postgresql.org/news.rss",
+    "https://blog.bytebytego.com/feed",
 }
 
 
@@ -51,6 +56,7 @@ def test_collect_articles_continues_when_one_feed_fails(monkeypatch, caplog):
             FeedSource("available", "https://example.com/feed.xml"),
         ),
         github_release_sources=(),
+        html_sources=(),
     )
 
     assert attempted_sources == ["unavailable", "available"]
@@ -70,6 +76,7 @@ def test_collect_articles_fails_when_all_sources_fail(monkeypatch):
                 FeedSource("unavailable", "https://example.com/missing.xml"),
             ),
             github_release_sources=(),
+            html_sources=(),
         )
 
 
@@ -81,6 +88,61 @@ def test_default_sources_match_configured_source_list():
         "https://github.com/moby/moby/releases.atom",
         "https://github.com/redis/redis/releases.atom",
     }
+    assert {source.url for source in default_html_sources()} == {
+        "https://www.ministryoftesting.com/",
+        "https://github.com/trending?since=weekly",
+    }
+
+
+@pytest.mark.parametrize(
+    ("source", "html", "expected_url", "expected_title"),
+    [
+        (
+            HtmlSource(
+                "Ministry of Testing",
+                "https://www.ministryoftesting.com/",
+                "ministry_of_testing",
+            ),
+            '<div class="title"><a class="stretched-link" '
+            'href="/articles/testing-well">Testing <em>Well</em></a></div>',
+            "https://www.ministryoftesting.com/articles/testing-well",
+            "Testing Well",
+        ),
+        (
+            HtmlSource(
+                "GitHub Trending (weekly)",
+                "https://github.com/trending?since=weekly",
+                "github_trending",
+            ),
+            '<article class="Box-row"><h2><a href="/owner/repo">'
+            "owner / repo</a></h2></article>",
+            "https://github.com/owner/repo",
+            "owner / repo",
+        ),
+    ],
+)
+def test_fetch_html_articles_extracts_source_links(
+    source, html, expected_url, expected_title
+):
+    class Response:
+        text = html
+
+        @staticmethod
+        def raise_for_status():
+            return None
+
+    class Client:
+        @staticmethod
+        def get(url):
+            return Response()
+
+    articles = fetch_html_articles(
+        Client(), source, runner.datetime.now(runner.UTC), limit=1
+    )
+
+    assert str(articles[0].url) == expected_url
+    assert articles[0].title == expected_title
+    assert articles[0].source_type.value == "html"
 
 
 def test_html_response_is_not_treated_as_an_empty_feed():

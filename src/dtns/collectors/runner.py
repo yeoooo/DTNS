@@ -21,11 +21,14 @@ from dtns.collectors.models import RawArticle, RawArticlesDocument, SourceType
 from dtns.collectors.sources import (
     FeedSource,
     GitHubReleaseSource,
+    HtmlSource,
     InvalidFeedError,
     default_feed_sources,
     default_github_release_sources,
+    default_html_sources,
     fetch_feed_articles,
     fetch_github_release_articles,
+    fetch_html_articles,
 )
 from dtns.contracts.collection_report import (
     CollectionReport,
@@ -49,6 +52,7 @@ def collect_articles(
     *,
     feed_sources: tuple[FeedSource, ...] | None = None,
     github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    html_sources: tuple[HtmlSource, ...] | None = None,
     limit_per_source: int | None = None,
     timeout_seconds: float = 20.0,
     source_run_id: str | None = None,
@@ -60,11 +64,14 @@ def collect_articles(
         feed_sources = default_feed_sources()
     if github_release_sources is None:
         github_release_sources = default_github_release_sources()
+    if html_sources is None:
+        html_sources = default_html_sources()
     source_run_id = source_run_id or str(uuid.uuid4())
 
     result = _collect_articles(
         feed_sources=feed_sources,
         github_release_sources=github_release_sources,
+        html_sources=html_sources,
         limit_per_source=limit_per_source,
         timeout_seconds=timeout_seconds,
         source_run_id=source_run_id,
@@ -82,14 +89,16 @@ def _collect_articles(
     *,
     feed_sources: tuple[FeedSource, ...],
     github_release_sources: tuple[GitHubReleaseSource, ...],
+    html_sources: tuple[HtmlSource, ...],
     limit_per_source: int | None,
     timeout_seconds: float,
     source_run_id: str,
 ) -> _CollectionResult:
     started_at = datetime.now(UTC)
-    configured_sources: list[FeedSource | GitHubReleaseSource] = [
+    configured_sources: list[FeedSource | GitHubReleaseSource | HtmlSource] = [
         *feed_sources,
         *github_release_sources,
+        *html_sources,
     ]
     if not configured_sources:
         raise ValueError("At least one article source must be configured")
@@ -173,6 +182,41 @@ def _collect_articles(
                     http_status,
                 )
 
+        for source in html_sources:
+            try:
+                fetched = fetch_html_articles(
+                    client,
+                    source,
+                    started_at,
+                    limit=limit_per_source,
+                )
+                accepted = _dedupe_by_url(fetched)
+                articles.extend(accepted)
+                source_reports.append(
+                    _successful_source_report(
+                        source.name,
+                        SourceType.HTML,
+                        fetched_count=len(fetched),
+                        accepted_count=len(accepted),
+                    )
+                )
+            except Exception as exc:
+                error_category, http_status = _classify_error(exc)
+                source_reports.append(
+                    _failed_source_report(
+                        source.name,
+                        SourceType.HTML,
+                        error_category,
+                        http_status,
+                    )
+                )
+                logger.warning(
+                    "Skipping unavailable HTML source %s (category=%s, status=%s)",
+                    source.name,
+                    error_category,
+                    http_status,
+                )
+
     successful_sources = sum(
         source.status != "failed" for source in source_reports
     )
@@ -208,6 +252,7 @@ def write_articles(
     *,
     feed_sources: tuple[FeedSource, ...] | None = None,
     github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    html_sources: tuple[HtmlSource, ...] | None = None,
     limit_per_source: int | None = None,
     timeout_seconds: float = 20.0,
     source_run_id: str | None = None,
@@ -223,6 +268,7 @@ def write_articles(
     document = collect_articles(
         feed_sources=feed_sources,
         github_release_sources=github_release_sources,
+        html_sources=html_sources,
         limit_per_source=limit_per_source,
         timeout_seconds=timeout_seconds,
         source_run_id=run_id,
@@ -349,7 +395,7 @@ def _reported_feed_source_type(
 
 
 def _source_config_fingerprint(
-    sources: list[FeedSource | GitHubReleaseSource],
+    sources: list[FeedSource | GitHubReleaseSource | HtmlSource],
 ) -> str:
     payload = [
         {
@@ -357,6 +403,8 @@ def _source_config_fingerprint(
             "source_type": (
                 SourceType.GITHUB_RELEASE
                 if isinstance(source, GitHubReleaseSource)
+                else SourceType.HTML
+                if isinstance(source, HtmlSource)
                 else _feed_source_type(source)
             ).value,
             "url": source.url,
@@ -376,6 +424,7 @@ def collector_policy_fingerprint(
     *,
     feed_sources: tuple[FeedSource, ...] | None = None,
     github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    html_sources: tuple[HtmlSource, ...] | None = None,
     limit_per_source: int | None = None,
     timeout_seconds: float = 20.0,
 ) -> str:
@@ -389,10 +438,11 @@ def collector_policy_fingerprint(
         if github_release_sources is None
         else github_release_sources
     )
+    resolved_html = default_html_sources() if html_sources is None else html_sources
     payload = {
         "policy_version": COLLECTOR_POLICY_VERSION,
         "source_config_fingerprint": _source_config_fingerprint(
-            [*resolved_feeds, *resolved_releases]
+            [*resolved_feeds, *resolved_releases, *resolved_html]
         ),
         "limit_per_source": limit_per_source,
         "timeout_seconds": timeout_seconds,
