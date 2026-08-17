@@ -227,6 +227,19 @@ Teams should update their operational guidance this week.
         validate_markdown(markdown, known_urls=set())
 
 
+def test_validate_markdown_ignores_contract_owned_english_article_title():
+    markdown = VALID_MARKDOWN + (
+        "\n- 🔗 [A Very Long English Article Title About Rendering Architecture "
+        "Performance Optimization and Production Workflows]"
+        "(https://known.example/article)"
+    )
+
+    assert validate_markdown(
+        markdown,
+        known_urls={"https://known.example/article"},
+    ) == markdown
+
+
 def test_editor_rejects_more_than_eight_trends(tmp_path):
     input_path = tmp_path / "technology_trends.json"
     _write_trends(input_path, count=9)
@@ -415,6 +428,46 @@ def test_editor_retries_truncation_then_uses_fallback(tmp_path, monkeypatch):
         "primary-model",
         "fallback-model",
     ]
+
+
+def test_editor_retries_non_korean_draft_with_explicit_feedback(tmp_path):
+    input_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    _write_trends(input_path)
+    _write_articles(articles_path)
+    english_draft = json.dumps(
+        {
+            "title": "Weekly Technology Newsletter",
+            "summary_items": ["This week brought an important platform change."],
+            "trend_sections": [
+                {
+                    "trend_id": "trend-0",
+                    "heading": "Platform change",
+                    "overview": "The ecosystem adopted a new deployment model.",
+                    "why_it_matters": (
+                        "Engineering teams must update their workflows."
+                    ),
+                    "article_ids": ["article-0"],
+                }
+            ],
+            "insight_items": ["Teams should monitor the rollout carefully."],
+        }
+    )
+    client = FakeClient(
+        [_response(english_draft), _response(_draft_response())]
+    )
+
+    write_newsletter(
+        input_path,
+        tmp_path / "technology_newsletter.md",
+        articles_path=articles_path,
+        client=client,
+        run_id="korean-retry-run",
+    )
+
+    assert len(client.models.calls) == 2
+    corrective_payload = json.loads(client.models.calls[1]["contents"][1])
+    assert corrective_payload["validation_feedback"] == "body_not_korean"
 
 
 def test_editor_resumes_matching_checkpoint_without_model_call(tmp_path):

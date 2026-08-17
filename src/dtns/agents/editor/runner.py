@@ -65,6 +65,7 @@ HANGUL_RE = re.compile(r"[가-힣]")
 LATIN_RE = re.compile(r"[A-Za-z]")
 ATX_HEADING_RE = re.compile(r"^#{1,6}\s+.*$", re.MULTILINE)
 BOLD_LABEL_RE = re.compile(r"^\s*\*\*[^*]+\*\*\s*$", re.MULTILINE)
+ARTICLE_LINK_LINE_RE = re.compile(r"^\s*-\s*🔗\s+.*$", re.MULTILINE)
 URL_START_RE = re.compile(r"https?://", re.IGNORECASE)
 PROHIBITED_PROSE_RE = re.compile(
     r"https?://|\]\s*\(|<a\s|<https?://", re.IGNORECASE
@@ -908,16 +909,37 @@ def _parse_bare_urls(markdown: str) -> list[str]:
 def _validate_korean_body(markdown: str) -> None:
     body = ATX_HEADING_RE.sub("", markdown)
     body = BOLD_LABEL_RE.sub("", body)
+    body = ARTICLE_LINK_LINE_RE.sub("", body)
     body = re.sub(r"https?://\S+", "", body, flags=re.IGNORECASE)
-    hangul_count = len(HANGUL_RE.findall(body))
-    latin_count = len(LATIN_RE.findall(body))
+    _require_korean_text(body)
+
+
+def _validate_korean_draft(draft: EditorDraft) -> None:
+    prose = [draft.title, *draft.summary_items, *draft.insight_items]
+    for section in draft.trend_sections:
+        prose.extend(
+            [section.heading, section.overview, section.why_it_matters]
+        )
+    try:
+        _require_korean_text("\n".join(prose))
+    except ValueError:
+        raise EditorContentError("body_not_korean") from None
+
+
+def _require_korean_text(text: str) -> None:
+    hangul_count = len(HANGUL_RE.findall(text))
+    latin_count = len(LATIN_RE.findall(text))
     language_characters = hangul_count + latin_count
     korean_ratio = hangul_count / language_characters if language_characters else 0
     if (
         hangul_count < MIN_KOREAN_BODY_CHARACTERS
         or korean_ratio < MIN_KOREAN_BODY_RATIO
     ):
-        raise ValueError("Editor Markdown body must be written in Korean.")
+        raise ValueError(
+            "Editor Markdown body must be written in Korean: "
+            f"hangul_count={hangul_count}, latin_count={latin_count}, "
+            f"korean_ratio={korean_ratio:.3f}"
+        )
 
 
 def _bold_heading(match: re.Match[str]) -> str:
@@ -1028,6 +1050,7 @@ def _generate_valid_draft(
                 }
             )
             _validate_draft_references(draft, trends_file, topic_articles)
+            _validate_korean_draft(draft)
             accept = getattr(generation, "accept", None)
             if callable(accept):
                 accept()
@@ -1401,7 +1424,7 @@ def _policy_fingerprint(
     resolved_fallback = fallback_model or DEFAULT_FALLBACK_MODEL
     policy = {
         "checkpoint_schema_version": SCHEMA_VERSION,
-        "validation_version": "3",
+        "validation_version": "4",
         "editor_draft_schema": EditorDraft.model_json_schema(),
         "renderer_policy": "editor-draft-to-newsletter-v1",
         "newsletter_contract": {
