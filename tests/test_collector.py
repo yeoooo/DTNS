@@ -62,7 +62,7 @@ def test_collect_articles_continues_when_one_feed_fails(monkeypatch, caplog):
         return []
 
     monkeypatch.setattr(runner, "fetch_feed_articles", fetch_feed_articles)
-    caplog.set_level(logging.WARNING, logger=runner.__name__)
+    caplog.set_level(logging.INFO, logger=runner.__name__)
 
     document = runner.collect_articles(
         feed_sources=(
@@ -77,6 +77,8 @@ def test_collect_articles_continues_when_one_feed_fails(monkeypatch, caplog):
     assert attempted_sources == ["unavailable", "available"]
     assert document.articles == []
     assert "Skipping unavailable feed unavailable" in caplog.text
+    assert "collector_run_metric" in caplog.text
+    assert "fetched_count=0 accepted_count=0" in caplog.text
 
 
 def test_collect_articles_fails_when_all_sources_fail(monkeypatch):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 import os
 import re
 from pathlib import Path
@@ -74,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(name)s %(message)s",
+    )
     _load_dotenv()
     parser = build_parser()
     args = parser.parse_args(argv)

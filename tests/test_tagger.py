@@ -120,6 +120,22 @@ def test_tag_articles_retries_invalid_batch_response_once(tmp_path):
     assert len(result.articles) == 1
 
 
+def test_tag_articles_preserves_required_null_published_at(tmp_path):
+    input_path = tmp_path / "normalized_articles.json"
+    output_path = tmp_path / "tagged_articles.json"
+    _write_normalized_articles(input_path, 1)
+    payload = json.loads(input_path.read_text(encoding="utf-8"))
+    payload["articles"][0]["published_at"] = None
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    tag_articles(input_path, output_path, llm_client=FakeTaggerClient())
+
+    written = json.loads(output_path.read_text(encoding="utf-8"))
+    assert "published_at" in written["articles"][0]
+    assert written["articles"][0]["published_at"] is None
+    assert stage._tagged_articles_validator().is_valid(written)
+
+
 @pytest.mark.parametrize(
     "invalid_field,invalid_value",
     [

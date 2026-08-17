@@ -124,6 +124,41 @@ def test_classifier_supports_multi_label_outputs(tmp_path):
     assert (tmp_path / "game_client_articles.json").exists()
 
 
+def test_classifier_preserves_required_null_published_at(tmp_path):
+    input_path = tmp_path / "tagged_articles.json"
+    now = datetime(2026, 6, 25, 0, 0, tzinfo=UTC).isoformat()
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": now,
+                "articles": [
+                    {
+                        "id": "article_null_date",
+                        "source": "Unreal Engine",
+                        "title": "Unreal Engine rendering update",
+                        "canonical_url": "https://example.com/unreal-null-date",
+                        "published_at": None,
+                        "tags": ["Rendering"],
+                        "technologies": ["Unreal Engine"],
+                        "domains": ["Game Development"],
+                        "ai_metadata": {"model": "fake", "confidence": 0.9},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    classify_articles(input_path, tmp_path)
+
+    written = json.loads(
+        (tmp_path / "game_client_articles.json").read_text(encoding="utf-8")
+    )
+    assert "published_at" in written["articles"][0]
+    assert written["articles"][0]["published_at"] is None
+
+
 def test_split_discord_messages_preserves_content():
     content = "first paragraph\n\n" + "x" * 20 + "\n\nlast paragraph"
 

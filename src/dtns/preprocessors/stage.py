@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import html
 import json
+import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,6 +44,7 @@ TRACKING_QUERY_KEYS = {
 IGNORED_QUERY_PREFIXES = ("utm_",)
 HTTP_SCHEMES = {"http", "https"}
 WHITESPACE_RE = re.compile(r"\s+")
+logger = logging.getLogger(__name__)
 
 
 class ArtifactValidationError(ValueError):
@@ -137,6 +139,14 @@ def preprocess(
         )
         + "\n",
         encoding="utf-8",
+    )
+    logger.info(
+        "preprocessor_metric input_count=%d output_count=%d removed_count=%d "
+        "published_at_null_count=%d",
+        len(raw_articles.articles),
+        len(normalized_articles),
+        len(raw_articles.articles) - len(normalized_articles),
+        sum(article.published_at is None for article in normalized_articles),
     )
     return output
 

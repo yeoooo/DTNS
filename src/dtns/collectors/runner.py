@@ -279,6 +279,37 @@ def _collect_articles(
     else:
         status = "failed"
 
+    for source_report in source_reports:
+        logger.info(
+            "collector_source_metric run_id=%s source=%s source_type=%s "
+            "status=%s fetched_count=%d accepted_count=%d duplicate_count=%d "
+            "http_status=%s error_category=%s",
+            source_run_id,
+            source_report.name,
+            source_report.source_type,
+            source_report.status,
+            source_report.fetched_count,
+            source_report.accepted_count,
+            source_report.fetched_count - source_report.accepted_count,
+            source_report.http_status,
+            source_report.error_category,
+        )
+    logger.info(
+        "collector_run_metric run_id=%s status=%s source_count=%d "
+        "successful_source_count=%d fetched_count=%d accepted_count=%d "
+        "duplicate_count=%d",
+        source_run_id,
+        status,
+        len(source_reports),
+        successful_sources,
+        sum(source.fetched_count for source in source_reports),
+        sum(source.accepted_count for source in source_reports),
+        sum(
+            source.fetched_count - source.accepted_count
+            for source in source_reports
+        ),
+    )
+
     return _CollectionResult(
         document=RawArticlesDocument(
             generated_at=started_at,

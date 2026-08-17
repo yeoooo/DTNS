@@ -236,17 +236,32 @@ def tag_articles(
         llm_client=client,
         attempted_models=[],
     )
+    logger.info(
+        "tagger_input_metric run_id=%s article_count=%d "
+        "published_at_null_count=%d",
+        selected_run_id,
+        len(document.articles),
+        sum(article.published_at is None for article in document.articles),
+    )
 
     checkpoints = _load_checkpoints(context)
     completed = _index_completed_articles(checkpoints, context)
     _restore_model_preference(client, checkpoints)
     _process_uncovered_ranges(completed, context)
     output = _finalize_document(document.articles, completed)
-    output_payload = output.model_dump(mode="json", exclude_none=True)
+    output_payload = _tagged_output_payload(output)
     _validate_tagged_articles_schema(output_payload)
     _atomic_write_json(
         output_path,
         output_payload,
+    )
+    logger.info(
+        "tagger_output_metric run_id=%s article_count=%d "
+        "checkpoint_count=%d attempted_models=%s",
+        selected_run_id,
+        len(output.articles),
+        len(_load_checkpoints(context)),
+        ",".join(_actual_attempted_models(context)) or "checkpoint-only",
     )
     return output
 
@@ -780,8 +795,51 @@ def _validate_normalized_articles_schema(payload: Any) -> None:
 
 
 def _validate_tagged_articles_schema(payload: Mapping[str, Any]) -> None:
-    if not _tagged_articles_validator().is_valid(payload):
-        raise ValueError("Final Tagger output violates tagged_articles JSON Schema")
+    errors = sorted(
+        _tagged_articles_validator().iter_errors(payload),
+        key=lambda error: [str(part) for part in error.absolute_path],
+    )
+    if not errors:
+        return
+
+    failures: list[str] = []
+    articles = payload.get("articles")
+    for error in errors[:10]:
+        path_parts = list(error.absolute_path)
+        path = "/".join(str(part) for part in path_parts) or "<root>"
+        identity = ""
+        if (
+            len(path_parts) >= 2
+            and path_parts[0] == "articles"
+            and isinstance(path_parts[1], int)
+            and isinstance(articles, list)
+            and path_parts[1] < len(articles)
+            and isinstance(articles[path_parts[1]], Mapping)
+        ):
+            article = articles[path_parts[1]]
+            identity = (
+                f" article_id={article.get('id', '<missing>')}"
+                f" source={article.get('source', '<missing>')}"
+            )
+        failures.append(
+            f"path={path} validator={error.validator}{identity} "
+            f"message={error.message}"
+        )
+    omitted = len(errors) - len(failures)
+    suffix = f"; omitted_errors={omitted}" if omitted else ""
+    raise ValueError(
+        "Final Tagger output violates tagged_articles JSON Schema: "
+        f"error_count={len(errors)}; " + "; ".join(failures) + suffix
+    )
+
+
+def _tagged_output_payload(
+    output: TaggedArticlesDocument,
+) -> dict[str, Any]:
+    payload = output.model_dump(mode="json", exclude_none=True)
+    for article in payload["articles"]:
+        article.setdefault("published_at", None)
+    return payload
 
 
 def _restore_model_preference(

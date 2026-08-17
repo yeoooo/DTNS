@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
 TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
 TOPICS = ("technology", "backend", "game_client")
 CLASSIFIER_POLICY_VERSION = "1"
+logger = logging.getLogger(__name__)
 
 Topic = Literal["technology", "backend", "game_client"]
 
@@ -158,7 +160,7 @@ def classify_articles(
         output_path = output_dir / TOPIC_ARTICLES_FILENAME_TEMPLATE.format(topic=topic)
         output_path.write_text(
             json.dumps(
-                document.model_dump(mode="json", exclude_none=True),
+                _topic_output_payload(document),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -166,7 +168,24 @@ def classify_articles(
             encoding="utf-8",
         )
 
+    logger.info(
+        "classifier_metric input_count=%d technology_count=%d "
+        "backend_count=%d game_client_count=%d total_assignment_count=%d",
+        len(tagged_document.articles),
+        len(classified["technology"].articles),
+        len(classified["backend"].articles),
+        len(classified["game_client"].articles),
+        sum(len(document.articles) for document in classified.values()),
+    )
+
     return classified
+
+
+def _topic_output_payload(document: TopicArticlesDocument) -> dict[str, object]:
+    payload = document.model_dump(mode="json", exclude_none=True)
+    for article in payload["articles"]:
+        article.setdefault("published_at", None)
+    return payload
 
 
 def classify_tagged_articles(
