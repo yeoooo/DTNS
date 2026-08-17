@@ -9,7 +9,7 @@
     "generated_at": { "type": "string", "format": "date-time" },
     "topic": {
       "type": "string",
-      "enum": ["technology", "backend", "qa"]
+      "enum": ["technology", "backend", "game_client"]
     },
     "articles": {
       "type": "array",

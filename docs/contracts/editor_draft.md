@@ -102,7 +102,7 @@ meaning only; it never contains presentation syntax. In particular:
 The title value is the human-readable title only:
 
 ```text
-주간 QA 및 품질 엔지니어링 리포트
+주간 게임 클라이언트 개발 리포트
 ```
 
 Technical identifiers remain unchanged in otherwise plain prose:
@@ -114,10 +114,10 @@ eBPF와 sched_ext 도입 사례가 늘고 있습니다.
 These values are invalid:
 
 ```text
-# 🗞️ 주간 QA 및 품질 엔지니어링 리포트
-🗞️ 주간 QA 및 품질 엔지니어링 리포트
-# 주간 QA 및 품질 엔지니어링 리포트
-[주간 QA 리포트](https://example.com)
+# 🗞️ 주간 게임 클라이언트 개발 리포트
+🗞️ 주간 게임 클라이언트 개발 리포트
+# 주간 게임 클라이언트 개발 리포트
+[주간 게임 클라이언트 개발 리포트](https://example.com)
 ```
 
 JSON Schema provides structural and basic lexical checks. Runtime validation
@@ -179,8 +179,8 @@ draft must already have failed validation. For a valid title, rendering is
 exactly:
 
 ```text
-draft.title = "주간 QA 및 품질 엔지니어링 리포트"
-rendered H1 = "# 🗞️ 주간 QA 및 품질 엔지니어링 리포트"
+draft.title = "주간 게임 클라이언트 개발 리포트"
+rendered H1 = "# 🗞️ 주간 게임 클라이언트 개발 리포트"
 ```
 
 ## Final Validation

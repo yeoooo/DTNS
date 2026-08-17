@@ -20,7 +20,7 @@ Tagger Agent
 Classifier
   -> technology_articles.json
   -> backend_articles.json
-  -> qa_articles.json
+  -> game_client_articles.json
 Technology Trend Agent
   -> technology_trends.json
 Technology Editor Agent
@@ -35,12 +35,12 @@ Backend Editor Agent
 Publisher
   -> Backend Discord Webhook
 
-QA Trend Agent
-  -> qa_trends.json
-QA Editor Agent
-  -> qa_newsletter.md
+Game Client Trend Agent
+  -> game_client_trends.json
+Game Client Editor Agent
+  -> game_client_newsletter.md
 Publisher
-  -> QA Discord Webhook
+  -> Game Client Discord Webhook
 ```
 
 ## Data Directory
@@ -55,9 +55,9 @@ Expected filenames:
 | Collector | `articles.json` |
 | Preprocessor | `normalized_articles.json` |
 | Tagger Agent | `tagged_articles.json` |
-| Classifier | `technology_articles.json`, `backend_articles.json`, `qa_articles.json` |
-| Trend Agent | `technology_trends.json`, `backend_trends.json`, `qa_trends.json` |
-| Editor Agent | `technology_newsletter.md`, `backend_newsletter.md`, `qa_newsletter.md` |
+| Classifier | `technology_articles.json`, `backend_articles.json`, `game_client_articles.json` |
+| Trend Agent | `technology_trends.json`, `backend_trends.json`, `game_client_trends.json` |
+| Editor Agent | `technology_newsletter.md`, `backend_newsletter.md`, `game_client_newsletter.md` |
 
 ## Topics
 
@@ -65,7 +65,7 @@ The supported topic identifiers are:
 
 - `technology`
 - `backend`
-- `qa`
+- `game_client`
 
 Classification is multi-label. A single article can appear in multiple topic
 article files.
@@ -139,13 +139,13 @@ newsletter tag
 newsletter classify
 newsletter trend --topic technology
 newsletter trend --topic backend
-newsletter trend --topic qa
+newsletter trend --topic game_client
 newsletter edit --topic technology
 newsletter edit --topic backend
-newsletter edit --topic qa
+newsletter edit --topic game_client
 newsletter publish --topic technology
 newsletter publish --topic backend
-newsletter publish --topic qa
+newsletter publish --topic game_client
 newsletter run-all
 ```
 

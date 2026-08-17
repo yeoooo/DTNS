@@ -20,7 +20,7 @@ from pydantic import BaseModel, ValidationError
 from dtns.pipeline import PipelineStage, run_pipeline
 
 
-TOPICS = ("technology", "backend", "qa")
+TOPICS = ("technology", "backend", "game_client")
 RUN_ALL_LIMIT_PER_SOURCE = 10
 ARTICLES_FILENAME = "articles.json"
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
@@ -346,7 +346,7 @@ def _publisher_configuration(topic: str) -> dict[str, str]:
     env_names = {
         "technology": "DISCORD_WEBHOOK_TECHNOLOGY",
         "backend": "DISCORD_WEBHOOK_BACKEND",
-        "qa": "DISCORD_WEBHOOK_QA",
+        "game_client": "DISCORD_WEBHOOK_GAME_CLIENT",
     }
     webhook = os.getenv(env_names[topic], "").strip()
     return {

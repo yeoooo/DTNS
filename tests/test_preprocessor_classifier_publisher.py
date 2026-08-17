@@ -96,13 +96,13 @@ def test_classifier_supports_multi_label_outputs(tmp_path):
                 "articles": [
                     {
                         "id": "article_1",
-                        "source": "GitHub Releases",
-                        "title": "Testcontainers update",
-                        "canonical_url": "https://example.com/testcontainers",
+                        "source": "Unreal Engine",
+                        "title": "Unreal Engine rendering architecture update",
+                        "canonical_url": "https://example.com/unreal-rendering",
                         "published_at": now,
-                        "tags": ["Testcontainers"],
-                        "technologies": ["Testcontainers"],
-                        "domains": ["Backend", "Quality Engineering"],
+                        "tags": ["Architecture", "Rendering"],
+                        "technologies": ["Unreal Engine"],
+                        "domains": ["Game Development"],
                         "ai_metadata": {
                             "model": "fake",
                             "confidence": 0.9,
@@ -117,11 +117,11 @@ def test_classifier_supports_multi_label_outputs(tmp_path):
 
     outputs = classify_articles(input_path, tmp_path)
 
-    assert [article.id for article in outputs["backend"].articles] == ["article_1"]
-    assert [article.id for article in outputs["qa"].articles] == ["article_1"]
-    assert outputs["technology"].articles == []
-    assert (tmp_path / "backend_articles.json").exists()
-    assert (tmp_path / "qa_articles.json").exists()
+    assert [article.id for article in outputs["technology"].articles] == ["article_1"]
+    assert [article.id for article in outputs["game_client"].articles] == ["article_1"]
+    assert outputs["backend"].articles == []
+    assert (tmp_path / "technology_articles.json").exists()
+    assert (tmp_path / "game_client_articles.json").exists()
 
 
 def test_split_discord_messages_preserves_content():
@@ -356,14 +356,14 @@ def test_publisher_keeps_receipts_for_each_webhook(tmp_path):
         for webhook_url in (webhook_a, webhook_b, webhook_a):
             publish_newsletter(
                 input_path,
-                topic="qa",
+                topic="game_client",
                 webhook_url=webhook_url,
                 client=client,
             )
 
     assert requested_urls == [webhook_a, webhook_b]
     receipt_paths = list(
-        (tmp_path / ".state" / "publisher" / "qa").glob("*.json")
+        (tmp_path / ".state" / "publisher" / "game_client").glob("*.json")
     )
     assert len(receipt_paths) == 2
 
@@ -426,19 +426,19 @@ def test_publisher_rejects_corrupted_receipt(tmp_path):
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         publish_newsletter(
             input_path,
-            topic="qa",
+            topic="game_client",
             webhook_url="https://discord.example/webhook",
             client=client,
         )
         receipt_path = next(
-            (tmp_path / ".state" / "publisher" / "qa").glob("*.json")
+            (tmp_path / ".state" / "publisher" / "game_client").glob("*.json")
         )
         receipt_path.write_text('{"schema_version": "invalid"}', encoding="utf-8")
 
         with pytest.raises(ValidationError):
             publish_newsletter(
                 input_path,
-                topic="qa",
+                topic="game_client",
                 webhook_url="https://discord.example/webhook",
                 client=client,
             )

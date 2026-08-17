@@ -28,7 +28,7 @@ Decision: Topic classification is multi-label.
 
 Reasoning: Engineering articles frequently cross boundaries. OpenTelemetry can
 belong to both technology trends and backend. Testcontainers can belong to both
-backend and QA.
+backend and game client development.
 
 Trade-off: Newsletters may share some articles. Editors should frame shared
 articles differently for each audience.

@@ -43,7 +43,7 @@
             "type": "array",
             "items": {
               "type": "string",
-              "examples": ["AI Engineering", "Backend", "Quality Engineering"]
+              "examples": ["AI Engineering", "Backend", "Game Development"]
             },
             "uniqueItems": true
           },

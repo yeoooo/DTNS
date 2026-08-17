@@ -36,9 +36,9 @@ class PipelineStageState(BaseModel):
         StringConstraints(
             pattern=(
                 r"^(collect|preprocess|tag|classify|"
-                r"trend:(technology|backend|qa)|"
-                r"edit:(technology|backend|qa)|"
-                r"publish:(technology|backend|qa))$"
+                r"trend:(technology|backend|game_client)|"
+                r"edit:(technology|backend|game_client)|"
+                r"publish:(technology|backend|game_client))$"
             )
         ),
     ]

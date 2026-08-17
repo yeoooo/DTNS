@@ -86,9 +86,9 @@ def test_run_all_executes_complete_pipeline_in_order(monkeypatch, tmp_path):
         ("trend", tmp_path, "backend"),
         ("edit", tmp_path, "backend"),
         ("publish", tmp_path, "backend"),
-        ("trend", tmp_path, "qa"),
-        ("edit", tmp_path, "qa"),
-        ("publish", tmp_path, "qa"),
+        ("trend", tmp_path, "game_client"),
+        ("edit", tmp_path, "game_client"),
+        ("publish", tmp_path, "game_client"),
     ]
 
 

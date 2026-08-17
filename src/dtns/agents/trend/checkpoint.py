@@ -56,7 +56,7 @@ class TrendCheckpoint(BaseModel):
 
     schema_version: Literal["1.0"] = CHECKPOINT_SCHEMA_VERSION
     run_id: NonEmptyString
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     input_fingerprint: Fingerprint
     policy_fingerprint: Fingerprint
     checkpoint_id: CheckpointId

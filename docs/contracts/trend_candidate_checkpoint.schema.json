@@ -21,7 +21,7 @@
     "run_id": { "type": "string", "minLength": 1 },
     "topic": {
       "type": "string",
-      "enum": ["technology", "backend", "qa"]
+      "enum": ["technology", "backend", "game_client"]
     },
     "input_fingerprint": {
       "type": "string",

@@ -44,9 +44,15 @@ Use concrete names when possible:
 - Redis
 - Kafka
 - PostgreSQL
-- Playwright
 - Testcontainers
 - OpenTelemetry
+- Unity
+- Unreal Engine
+- Godot
+- C#
+- C++
+- Rendering
+- Shader
 - Security
 - Performance Testing
 

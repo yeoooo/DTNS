@@ -7,7 +7,7 @@ Rules:
 
 - No AI.
 - Use `DISCORD_WEBHOOK_TECHNOLOGY`, `DISCORD_WEBHOOK_BACKEND`, and
-  `DISCORD_WEBHOOK_QA`.
+  `DISCORD_WEBHOOK_GAME_CLIENT`.
 - Split messages when required by Discord limits.
 - Preserve Markdown content except for safe splitting.
 - Follow `docs/contracts/discord_delivery.md` for HTTP retry behavior.

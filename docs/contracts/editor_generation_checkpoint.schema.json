@@ -19,7 +19,7 @@
   "properties": {
     "schema_version": { "const": "1.0" },
     "run_id": { "type": "string", "minLength": 1 },
-    "topic": { "type": "string", "enum": ["technology", "backend", "qa"] },
+    "topic": { "type": "string", "enum": ["technology", "backend", "game_client"] },
     "input_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "policy_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "model": { "type": "string", "minLength": 1 },

@@ -4,7 +4,7 @@ Editor agents write one Markdown file per topic:
 
 - `technology_newsletter.md`
 - `backend_newsletter.md`
-- `qa_newsletter.md`
+- `game_client_newsletter.md`
 
 ## Requirements
 
@@ -53,7 +53,7 @@ Recommended emoji vocabulary:
 - `🚀` high importance trend
 - `🧭` medium importance trend
 - `🔧` implementation or operational note
-- `🧪` QA/testing note
+- `🎮` game client development note
 - `🔗` article links
 - `💡` weekly insight
 - `⚠️` caution or risk

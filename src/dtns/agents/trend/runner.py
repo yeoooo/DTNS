@@ -93,7 +93,7 @@ class TopicArticlesFile(BaseModel):
     model_config = ConfigDict(extra="forbid")
     schema_version: Literal["1.0"]
     generated_at: datetime
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     articles: list[TopicArticle] = Field(default_factory=list)
 
 
@@ -132,7 +132,7 @@ class TrendsFile(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     schema_version: Literal["1.0"] = SCHEMA_VERSION
     generated_at: datetime
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     period: TrendPeriod | None = None
     trends: list[Trend] = Field(default_factory=list, max_length=8)
 
@@ -277,7 +277,7 @@ class TrendRunError(RuntimeError):
 @dataclass
 class _RunContext:
     run_id: str
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     input_fingerprint: str
     policy_fingerprint: str
     state_path: Path
@@ -1001,10 +1001,10 @@ def _resolve_model(model: str | None) -> str:
     return value
 
 
-def _normalize_topic(topic: str) -> Literal["technology", "backend", "qa"]:
+def _normalize_topic(topic: str) -> Literal["technology", "backend", "game_client"]:
     normalized = topic.strip()
-    if normalized not in {"technology", "backend", "qa"}:
-        raise ValueError("topic must be technology, backend, or qa")
+    if normalized not in {"technology", "backend", "game_client"}:
+        raise ValueError("topic must be technology, backend, or game_client")
     return normalized  # type: ignore[return-value]
 
 

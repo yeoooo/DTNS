@@ -20,7 +20,7 @@
         "properties": {
           "stage_id": {
             "type": "string",
-            "pattern": "^(collect|preprocess|tag|classify|trend:(technology|backend|qa)|edit:(technology|backend|qa)|publish:(technology|backend|qa))$"
+            "pattern": "^(collect|preprocess|tag|classify|trend:(technology|backend|game_client)|edit:(technology|backend|game_client)|publish:(technology|backend|game_client))$"
           },
           "status": { "type": "string", "enum": ["pending", "running", "completed", "failed", "skipped"] },
           "attempts": { "type": "integer", "minimum": 0 },

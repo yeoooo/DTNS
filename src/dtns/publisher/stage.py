@@ -29,7 +29,7 @@ from dtns.publisher.receipt import (
 )
 
 
-Topic = Literal["technology", "backend", "qa"]
+Topic = Literal["technology", "backend", "game_client"]
 
 DISCORD_CONTENT_LIMIT = 2000
 DEFAULT_TIMEOUT_SECONDS = 20.0
@@ -41,7 +41,7 @@ NEWSLETTER_FILENAME_TEMPLATE = "{topic}_newsletter.md"
 WEBHOOK_ENV_VARS: Mapping[Topic, str] = {
     "technology": "DISCORD_WEBHOOK_TECHNOLOGY",
     "backend": "DISCORD_WEBHOOK_BACKEND",
-    "qa": "DISCORD_WEBHOOK_QA",
+    "game_client": "DISCORD_WEBHOOK_GAME_CLIENT",
 }
 
 

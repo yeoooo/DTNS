@@ -16,7 +16,7 @@
   "properties": {
     "schema_version": { "const": "1.0" },
     "run_id": { "type": "string", "minLength": 1 },
-    "topic": { "type": "string", "enum": ["technology", "backend", "qa"] },
+    "topic": { "type": "string", "enum": ["technology", "backend", "game_client"] },
     "newsletter_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "webhook_fingerprint": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "status": { "type": "string", "enum": ["pending", "partial", "completed", "failed"] },

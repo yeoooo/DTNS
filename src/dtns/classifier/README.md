@@ -4,7 +4,7 @@ The classifier reads `tagged_articles.json` and writes:
 
 - `technology_articles.json`
 - `backend_articles.json`
-- `qa_articles.json`
+- `game_client_articles.json`
 
 Classification is deterministic and multi-label.
 

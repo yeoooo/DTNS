@@ -43,7 +43,7 @@ class PublishReceipt(BaseModel):
 
     schema_version: Literal["1.0"] = RECEIPT_SCHEMA_VERSION
     run_id: NonEmptyString
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     newsletter_fingerprint: Fingerprint
     webhook_fingerprint: Fingerprint
     status: Literal["pending", "partial", "completed", "failed"] = "pending"

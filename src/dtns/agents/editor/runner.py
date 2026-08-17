@@ -138,7 +138,7 @@ class TrendsFile(BaseModel):
 
     schema_version: Literal["1.0"]
     generated_at: datetime
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     period: TrendPeriod | None = None
     trends: list[Trend] = Field(default_factory=list, max_length=MAX_TRENDS)
 
@@ -245,7 +245,7 @@ class TopicArticlesFile(BaseModel):
 
     schema_version: Literal["1.0"]
     generated_at: datetime
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     articles: list[TopicArticle] = Field(default_factory=list)
 
     @field_validator("topic")
@@ -314,7 +314,7 @@ class EditorDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     schema_version: Literal["1.0"] = SCHEMA_VERSION
-    topic: Literal["technology", "backend", "qa"]
+    topic: Literal["technology", "backend", "game_client"]
     generated_at: datetime
     title: str = Field(
         min_length=1,
@@ -593,7 +593,7 @@ def _empty_newsletter(topic: str) -> str:
     topic_names = {
         "technology": "Technology Trends",
         "backend": "Backend",
-        "qa": "QA / Quality Engineering",
+        "game_client": "게임 클라이언트 개발",
     }
     topic_name = topic_names.get(topic, topic)
     return (
@@ -1338,7 +1338,7 @@ def _write_candidate_and_checkpoint(
     model: str,
     state_path: Path,
     run_id: str,
-    topic: Literal["technology", "backend", "qa"],
+    topic: Literal["technology", "backend", "game_client"],
     input_fingerprint: str,
     policy_fingerprint: str,
 ) -> None:
@@ -1365,7 +1365,7 @@ def _load_valid_candidate(
     *,
     state_path: Path,
     run_id: str,
-    topic: Literal["technology", "backend", "qa"],
+    topic: Literal["technology", "backend", "game_client"],
     input_fingerprint: str,
     policy_fingerprint: str,
     known_urls: set[str],

@@ -16,7 +16,7 @@
     "schema_version": { "const": "1.0" },
     "topic": {
       "type": "string",
-      "enum": ["technology", "backend", "qa"]
+      "enum": ["technology", "backend", "game_client"]
     },
     "generated_at": { "type": "string", "format": "date-time" },
     "title": { "$ref": "#/$defs/plainHeading160" },

@@ -21,10 +21,10 @@ from dtns.contracts.tagged_articles import (
 
 TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
 TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
-TOPICS = ("technology", "backend", "qa")
+TOPICS = ("technology", "backend", "game_client")
 CLASSIFIER_POLICY_VERSION = "1"
 
-Topic = Literal["technology", "backend", "qa"]
+Topic = Literal["technology", "backend", "game_client"]
 
 TECHNOLOGY_TERMS = {
     "ai",
@@ -62,29 +62,29 @@ BACKEND_TERMS = {
     "testcontainers",
 }
 
-QA_TERMS = {
-    "api testing",
-    "chaos engineering",
-    "ci/cd quality gates",
-    "contract testing",
-    "cypress",
-    "junit",
-    "load testing",
-    "mutation testing",
-    "performance testing",
-    "playwright",
-    "quality engineering",
-    "selenium",
-    "sonarqube",
-    "static analysis",
-    "test automation",
-    "testcontainers",
+GAME_CLIENT_TERMS = {
+    "animation",
+    "c#",
+    "c++",
+    "game client",
+    "game development",
+    "game engine",
+    "gameplay",
+    "godot",
+    "graphics",
+    "mobile game",
+    "rendering",
+    "shader",
+    "unity",
+    "unreal engine",
+    "ue5",
+    "uefn",
 }
 
 TERM_RULES: dict[Topic, set[str]] = {
     "technology": TECHNOLOGY_TERMS,
     "backend": BACKEND_TERMS,
-    "qa": QA_TERMS,
+    "game_client": GAME_CLIENT_TERMS,
 }
 
 
@@ -178,7 +178,7 @@ def classify_tagged_articles(
     topic_articles: dict[Topic, list[TopicArticle]] = {
         "technology": [],
         "backend": [],
-        "qa": [],
+        "game_client": [],
     }
 
     for article in articles:
