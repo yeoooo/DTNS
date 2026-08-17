@@ -312,13 +312,20 @@ publish 명령은 선택한 뉴스레터 주제에 대응하는 Discord Webhook 
 
 # 자동화
 
-DTNS는
+현재 운영 스케줄은 Google Cloud Scheduler에서 관리합니다.
 
-- GitHub Actions Cron
-- 로컬 스케줄러
+```text
+Google Cloud Scheduler
+  -> GitHub Actions workflow_dispatch
+  -> uv run newsletter run-all
+  -> Discord Webhook 발행
+```
 
-환경에서 실행할 수 있도록 설계되었습니다.
+GitHub Actions 워크플로는 자체 Cron 일정을 갖지 않으며
+`workflow_dispatch` 이벤트를 통해 실행됩니다. Google Cloud Scheduler가 정해진
+시간에 워크플로 실행을 요청하고, GitHub Actions가 전체 뉴스레터 생성 및 발행
+파이프라인을 수행합니다.
 
-초기 운영 환경은 GitHub Actions Cron을 목표로 합니다.
-
-CLI 기반으로 실행되므로 애플리케이션은 상태를 저장하지 않는(Stateless) 구조를 유지하며, GitHub Actions에서 주기적으로 실행하는 것만으로 전체 뉴스레터 생성 및 발행 과정을 수행할 수 있습니다.
+로컬에서는 동일한 작업을 `uv run newsletter run-all`로 직접 실행할 수 있습니다.
+스케줄 관리와 애플리케이션 실행 책임을 분리하며, 애플리케이션은 CLI 기반의
+Stateless 구조를 유지합니다.
