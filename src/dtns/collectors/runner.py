@@ -41,7 +41,7 @@ from dtns.contracts.collection_report import (
 
 DEFAULT_ARTICLES_FILENAME = "articles.json"
 COLLECTION_REPORT_FILENAME = "collection_report.json"
-COLLECTOR_POLICY_VERSION = "2"
+COLLECTOR_POLICY_VERSION = "3"
 logger = logging.getLogger(__name__)
 
 
@@ -118,7 +118,12 @@ def _collect_articles(
 
     articles: list[RawArticle] = []
     source_reports: list[CollectionSourceReport] = []
-    headers = {"User-Agent": "dtns-collector/0.1 (+https://github.com/dtns)"}
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (compatible; DTNSCollector/0.1; "
+            "+https://github.com/yeoooo/DTNS)"
+        )
+    }
     with httpx.Client(
         follow_redirects=True,
         timeout=timeout_seconds,

@@ -15,6 +15,7 @@ from dtns.collectors.sources import (
     HtmlSource,
     InvalidFeedError,
     XSource,
+    _clean_text,
     _parse_feed,
     default_html_sources,
     default_feed_sources,
@@ -43,10 +44,18 @@ EXPECTED_FEED_URLS = {
     "https://developer.nvidia.com/blog/category/graphics/feed/",
     "https://devblogs.microsoft.com/directx/feed/",
     "https://www.gamedeveloper.com/rss.xml",
+    "https://gamefromscratch.com/feed/",
+    "https://howtomarketagame.com/feed/",
+    "https://itch.io/devlogs.xml",
     "https://android-developers.googleblog.com/feeds/posts/default/-/Games",
     "https://developer.apple.com/news/rss/news.rss",
     "https://huggingface.co/blog/feed.xml",
     "https://inside.java/feed.xml",
+    "https://techblog.woowahan.com/feed/",
+    "https://d2.naver.com/d2.atom",
+    "https://engineering.linecorp.com/ko/feed/",
+    "https://toss.tech/rss.xml",
+    "https://medium.com/feed/daangn",
     "https://www.postgresql.org/news.rss",
     "https://blog.bytebytego.com/feed",
 }
@@ -111,6 +120,7 @@ def test_default_sources_match_configured_source_list():
         "https://www.advances.realtimerendering.com/",
         "https://www.linkedin.com/blog/engineering/feed",
         "https://github.com/trending?since=weekly",
+        "https://80.lv/",
     }
     assert {source.username for source in default_x_sources()} == {
         "dair_ai",
@@ -169,6 +179,14 @@ def test_default_sources_match_configured_source_list():
             "owner / repo</a></h2></article>",
             "https://github.com/owner/repo",
             "owner / repo",
+        ),
+        (
+            HtmlSource("80 LEVEL", "https://80.lv/", "eighty_level"),
+            '<a href="/articles/custom-ocean-shader-in-godot">'
+            "Custom Ocean Shader In Godot</a>"
+            '<a href="/articles/category?slug=godot">Godot</a>',
+            "https://80.lv/articles/custom-ocean-shader-in-godot",
+            "Custom Ocean Shader In Godot",
         ),
     ],
 )
@@ -229,6 +247,22 @@ def test_fetch_x_articles_uses_official_api_and_maps_posts():
     assert articles[0].title == "A useful note about LLM agents."
     assert articles[0].published_at.isoformat() == "2026-08-17T01:02:03+00:00"
     assert articles[0].source_type.value == "api"
+
+
+def test_feed_text_removes_html_markup():
+    feed = _parse_feed(
+        b'<?xml version="1.0"?><rss version="2.0"><channel>'
+        b"<title>Example</title><link>https://example.com</link>"
+        b"<description>Example</description><item>"
+        b"<title><![CDATA[<p>Unreal <em>Engine</em> Update</p>]]></title>"
+        b"<link>https://example.com/update</link>"
+        b"<description><![CDATA[<p>First paragraph.</p><p>Second.</p>]]>"
+        b"</description></item></channel></rss>"
+    )
+
+    entry = feed.entries[0]
+    assert _clean_text(entry.title) == "Unreal Engine Update"
+    assert _clean_text(entry.description) == "First paragraph. Second."
 
 
 def test_x_sources_are_optional_and_fingerprint_excludes_secret(monkeypatch):

@@ -7,6 +7,7 @@ summary field comes directly from the upstream source.
 from __future__ import annotations
 
 import calendar
+import html
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from html.parser import HTMLParser
@@ -115,6 +116,21 @@ DEFAULT_FEED_SOURCES = (
         SourceType.RSS,
     ),
     FeedSource(
+        "Game From Scratch",
+        "https://gamefromscratch.com/feed/",
+        SourceType.RSS,
+    ),
+    FeedSource(
+        "How To Market A Game",
+        "https://howtomarketagame.com/feed/",
+        SourceType.RSS,
+    ),
+    FeedSource(
+        "itch.io Devlogs",
+        "https://itch.io/devlogs.xml",
+        SourceType.RSS,
+    ),
+    FeedSource(
         "Android Developers Blog: Games",
         "https://android-developers.googleblog.com/feeds/posts/default/-/Games",
         SourceType.ATOM,
@@ -130,6 +146,23 @@ DEFAULT_FEED_SOURCES = (
         SourceType.RSS,
     ),
     FeedSource("Inside.java", "https://inside.java/feed.xml"),
+    FeedSource(
+        "우아한형제들 기술블로그",
+        "https://techblog.woowahan.com/feed/",
+        SourceType.RSS,
+    ),
+    FeedSource("NAVER D2", "https://d2.naver.com/d2.atom", SourceType.ATOM),
+    FeedSource(
+        "LINE Engineering",
+        "https://engineering.linecorp.com/ko/feed/",
+        SourceType.RSS,
+    ),
+    FeedSource("Toss Tech", "https://toss.tech/rss.xml", SourceType.RSS),
+    FeedSource(
+        "당근 기술 블로그",
+        "https://medium.com/feed/daangn",
+        SourceType.RSS,
+    ),
     FeedSource(
         "PostgreSQL News",
         "https://www.postgresql.org/news.rss",
@@ -158,6 +191,11 @@ DEFAULT_HTML_SOURCES = (
         "GitHub Trending (weekly)",
         "https://github.com/trending?since=weekly",
         "github_trending",
+    ),
+    HtmlSource(
+        "80 LEVEL",
+        "https://80.lv/",
+        "eighty_level",
     ),
 )
 
@@ -408,11 +446,19 @@ class _ArticleLinkParser(HTMLParser):
             and "grid-post__link" in classes
             and bool(href)
         )
+        is_eighty_level_article = (
+            self.parser == "eighty_level"
+            and bool(href)
+            and normalized_href.startswith("articles/")
+            and normalized_href != "articles/category"
+            and normalized_href.count("/") == 1
+        )
         if (
             is_trending_repository
             or is_gdc_session
             or is_rendering_course
             or is_linkedin_article
+            or is_eighty_level_article
         ):
             self._capture_depth = 1
             self._href = href
@@ -506,8 +552,45 @@ def _entry_datetime(entry: Any) -> datetime | None:
 def _clean_text(value: Any) -> str | None:
     if value is None:
         return None
-    text = str(value).strip()
+    parser = _PlainTextParser()
+    parser.feed(html.unescape(str(value)))
+    parser.close()
+    text = " ".join("".join(parser.parts).split())
     return text or None
+
+
+class _PlainTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "blockquote",
+        "br",
+        "div",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "li",
+        "p",
+        "tr",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag in self._BLOCK_TAGS:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._BLOCK_TAGS:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
 
 
 def _feed_entry_raw(entry: Any) -> dict[str, Any]:

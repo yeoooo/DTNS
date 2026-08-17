@@ -60,6 +60,40 @@ def test_preprocess_deduplicates_and_removes_tracking_query(tmp_path):
     assert json.loads(output_path.read_text(encoding="utf-8"))["articles"][0]["id"]
 
 
+def test_preprocess_removes_html_from_article_text(tmp_path):
+    input_path = tmp_path / "articles.json"
+    output_path = tmp_path / "normalized_articles.json"
+    now = datetime(2026, 8, 17, tzinfo=UTC).isoformat()
+    input_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "generated_at": now,
+                "articles": [
+                    {
+                        "source": "<p>Unreal Engine</p>",
+                        "title": "<p>New <em>animation</em> workflow</p>",
+                        "url": "https://example.com/animation",
+                        "summary": "<p>First.</p><p>Second &amp; third.</p>",
+                        "author": "<strong>Epic Games</strong>",
+                        "published_at": None,
+                        "collected_at": now,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output = preprocess(input_path, output_path)
+
+    article = output.articles[0]
+    assert article.source == "Unreal Engine"
+    assert article.title == "New animation workflow"
+    assert article.summary == "First. Second & third."
+    assert article.author == "Epic Games"
+
+
 def test_preprocess_sanitizes_artifact_validation_error(tmp_path):
     input_path = tmp_path / "articles.json"
     output_path = tmp_path / "normalized_articles.json"

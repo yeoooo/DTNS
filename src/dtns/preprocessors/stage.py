@@ -12,6 +12,7 @@ import json
 import logging
 import re
 from datetime import UTC, datetime
+from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
@@ -22,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 ARTICLES_FILENAME = "articles.json"
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
 SCHEMA_VERSION = "1.0"
-PREPROCESSOR_POLICY_VERSION = "1"
+PREPROCESSOR_POLICY_VERSION = "2"
 
 SourceType = Literal["rss", "atom", "github_release", "api", "html"]
 
@@ -213,13 +214,16 @@ def normalize_article(article: RawArticle) -> NormalizedArticle | None:
 def normalize_title(title: str) -> str:
     """Decode HTML entities and collapse whitespace in article titles."""
 
-    return normalize_text(html.unescape(title)) or ""
+    return normalize_text(title) or ""
 
 
 def normalize_text(value: str | None) -> str | None:
     if value is None:
         return None
-    normalized = WHITESPACE_RE.sub(" ", html.unescape(value)).strip()
+    parser = _PlainTextParser()
+    parser.feed(html.unescape(value))
+    parser.close()
+    normalized = WHITESPACE_RE.sub(" ", "".join(parser.parts)).strip()
     return normalized or None
 
 
@@ -273,6 +277,7 @@ def preprocessor_policy_fingerprint() -> str:
         "whitespace_pattern": WHITESPACE_RE.pattern,
         "rules": {
             "decode_html_entities": True,
+            "strip_html": True,
             "reject_url_credentials": True,
             "remove_default_ports": True,
             "remove_fragments": True,
@@ -289,6 +294,40 @@ def preprocessor_policy_fingerprint() -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+class _PlainTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "blockquote",
+        "br",
+        "div",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "li",
+        "p",
+        "tr",
+    }
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if tag in self._BLOCK_TAGS:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in self._BLOCK_TAGS:
+            self.parts.append(" ")
+
+    def handle_data(self, data: str) -> None:
+        self.parts.append(data)
 
 
 def _normalize_path(path: str) -> str:

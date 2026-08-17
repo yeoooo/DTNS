@@ -82,10 +82,12 @@ Discord Webhook 발행
 - 공식 프로젝트 블로그: Spring, Kubernetes, OpenTelemetry
 - 게임 클라이언트: GDC Vault, Unreal Engine, Unity LTS Releases, Godot Engine,
   AMD GPUOpen, NVIDIA Developer Blog, Microsoft DirectX, Game Developer,
+  Game From Scratch, How To Market A Game, itch.io Devlogs, 80 LEVEL,
   Advances in Real-Time Rendering, Android Developers Games, Apple Developer News
 - AI 연구 큐레이션: Hugging Face Blog 및 선택적 X 계정(`@dair_ai`,
   `@Weyaxi`, `@rasbt`, `@karpathy`, `@huggingface`)
-- Backend/Java: LinkedIn Engineering Feed, Inside.java
+- Backend/Java: LinkedIn Engineering Feed, Inside.java, 우아한형제들 기술블로그,
+  NAVER D2, LINE Engineering, Toss Tech, 당근 기술 블로그
 - 데이터베이스: PostgreSQL News
 - GitHub Releases: Moby, Redis
 - GitHub Trending: 주간 인기 저장소
@@ -101,6 +103,7 @@ Discord Webhook 발행
 수집한 데이터를 후처리합니다.
 
 - 데이터 정규화
+- 제목·요약·출처의 HTML 태그 제거
 - 중복 제거
 - URL 정리
 - Stable ID 생성
