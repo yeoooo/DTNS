@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -32,6 +33,7 @@ def test_run_all_executes_complete_pipeline_in_order(monkeypatch, tmp_path):
             stage.action()
 
     monkeypatch.setattr(cli, "run_pipeline", execute_pipeline)
+    monkeypatch.setattr(cli, "_log_pipeline_summary", lambda *args: None)
 
     monkeypatch.setattr(
         cli,
@@ -100,6 +102,7 @@ def test_run_all_passes_explicit_run_id_to_every_ai_stage(monkeypatch, tmp_path)
         "run_pipeline",
         lambda data_dir, run_id, stages: [stage.action() for stage in stages],
     )
+    monkeypatch.setattr(cli, "_log_pipeline_summary", lambda *args: None)
     monkeypatch.setattr(cli, "_run_collect", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_run_preprocess", lambda *args, **kwargs: None)
     monkeypatch.setattr(cli, "_run_classify", lambda *args, **kwargs: None)
@@ -129,6 +132,52 @@ def test_run_all_passes_explicit_run_id_to_every_ai_stage(monkeypatch, tmp_path)
     ) == 0
     assert observed
     assert {run_id for _, run_id in observed} == {"shared-run"}
+
+
+def test_pipeline_summary_logs_final_article_counts(tmp_path, caplog):
+    run_id = "summary-run"
+    artifact_counts = {
+        "articles.json": 10,
+        "normalized_articles.json": 8,
+        "tagged_articles.json": 8,
+        "technology_articles.json": 4,
+        "backend_articles.json": 3,
+        "game_client_articles.json": 5,
+    }
+    for filename, count in artifact_counts.items():
+        (tmp_path / filename).write_text(
+            json.dumps({"articles": [{} for _ in range(count)]}),
+            encoding="utf-8",
+        )
+    report_path = (
+        tmp_path
+        / ".state"
+        / "collector"
+        / run_id
+        / "collection_report.json"
+    )
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {"status": "success"},
+                    {"status": "empty"},
+                    {"status": "failed"},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    caplog.set_level(logging.INFO, logger=cli.__name__)
+
+    cli._log_pipeline_summary(tmp_path, run_id)
+
+    assert "파이프라인_최종_지표" in caplog.text
+    assert "수집_기사_수=10" in caplog.text
+    assert "정규화_기사_수=8 제거_기사_수=2" in caplog.text
+    assert "기술_기사_수=4 백엔드_기사_수=3 게임_클라이언트_기사_수=5" in caplog.text
+    assert "성공_수집원_수=2 실패_수집원_수=1 발행_주제_수=3" in caplog.text
 
 
 def test_validate_trends_accepts_strict_json_dates(tmp_path):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import os
 import re
@@ -30,6 +31,7 @@ TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
 TOPIC_TRENDS_FILENAME_TEMPLATE = "{topic}_trends.json"
 NEWSLETTER_FILENAME_TEMPLATE = "{topic}_newsletter.md"
 ArtifactModel = TypeVar("ArtifactModel", bound=BaseModel)
+logger = logging.getLogger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -305,6 +307,57 @@ def _run_all(
             ]
         )
     run_pipeline(data_dir, run_id, stages)
+    _log_pipeline_summary(data_dir, run_id)
+
+
+def _log_pipeline_summary(data_dir: Path, run_id: str) -> None:
+    from dtns.collectors.runner import collection_report_path
+
+    collected_count = _artifact_article_count(data_dir / ARTICLES_FILENAME)
+    normalized_count = _artifact_article_count(
+        data_dir / NORMALIZED_ARTICLES_FILENAME
+    )
+    tagged_count = _artifact_article_count(data_dir / TAGGED_ARTICLES_FILENAME)
+    topic_counts = {
+        topic: _artifact_article_count(
+            data_dir / TOPIC_ARTICLES_FILENAME_TEMPLATE.format(topic=topic)
+        )
+        for topic in TOPICS
+    }
+    report = json.loads(
+        collection_report_path(data_dir, run_id).read_text(encoding="utf-8")
+    )
+    sources = report["sources"]
+    successful_source_count = sum(
+        source["status"] != "failed" for source in sources
+    )
+    failed_source_count = len(sources) - successful_source_count
+
+    logger.info(
+        "파이프라인_최종_지표 실행_ID=%s 수집_기사_수=%d "
+        "정규화_기사_수=%d 제거_기사_수=%d 태깅_기사_수=%d "
+        "기술_기사_수=%d 백엔드_기사_수=%d 게임_클라이언트_기사_수=%d "
+        "성공_수집원_수=%d 실패_수집원_수=%d 발행_주제_수=%d",
+        run_id,
+        collected_count,
+        normalized_count,
+        collected_count - normalized_count,
+        tagged_count,
+        topic_counts["technology"],
+        topic_counts["backend"],
+        topic_counts["game_client"],
+        successful_source_count,
+        failed_source_count,
+        len(TOPICS),
+    )
+
+
+def _artifact_article_count(path: Path) -> int:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    articles = payload.get("articles")
+    if not isinstance(articles, list):
+        raise ValueError(f"Artifact does not contain an articles array: {path}")
+    return len(articles)
 
 
 def _ai_configuration(stage: str, *, topic: str | None = None) -> dict[str, str]:
