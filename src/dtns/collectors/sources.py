@@ -9,7 +9,9 @@ from __future__ import annotations
 import calendar
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from html.parser import HTMLParser
 from typing import Any, Iterable
+from urllib.parse import urljoin, urlparse
 
 import feedparser
 import httpx
@@ -47,6 +49,26 @@ class GitHubReleaseSource:
         return f"https://github.com/{self.repository}/releases.atom"
 
 
+@dataclass(frozen=True)
+class HtmlSource:
+    name: str
+    url: str
+    parser: str
+
+
+@dataclass(frozen=True)
+class XSource:
+    username: str
+
+    @property
+    def name(self) -> str:
+        return f"X: @{self.username}"
+
+    @property
+    def url(self) -> str:
+        return f"https://x.com/{self.username}"
+
+
 DEFAULT_FEED_SOURCES = (
     FeedSource("InfoQ", "https://www.infoq.com/feed", SourceType.RSS),
     FeedSource("The New Stack", "https://thenewstack.io/feed/", SourceType.RSS),
@@ -65,12 +87,86 @@ DEFAULT_FEED_SOURCES = (
         "OpenTelemetry Blog",
         "https://opentelemetry.io/blog/index.xml",
     ),
-    FeedSource("Playwright", "https://dev.to/feed/playwright", SourceType.RSS),
+    FeedSource(
+        "Unity LTS Releases",
+        "https://unity.com/releases/editor/lts-releases.xml",
+        SourceType.RSS,
+    ),
+    FeedSource(
+        "Unreal Engine",
+        "https://www.unrealengine.com/rss",
+        SourceType.RSS,
+    ),
+    FeedSource("Godot Engine", "https://godotengine.org/rss.xml", SourceType.RSS),
+    FeedSource("AMD GPUOpen", "https://gpuopen.com/feed.xml", SourceType.RSS),
+    FeedSource(
+        "NVIDIA Developer Blog: Graphics",
+        "https://developer.nvidia.com/blog/category/graphics/feed/",
+        SourceType.ATOM,
+    ),
+    FeedSource(
+        "Microsoft DirectX Developer Blog",
+        "https://devblogs.microsoft.com/directx/feed/",
+        SourceType.RSS,
+    ),
+    FeedSource(
+        "Game Developer",
+        "https://www.gamedeveloper.com/rss.xml",
+        SourceType.RSS,
+    ),
+    FeedSource(
+        "Android Developers Blog: Games",
+        "https://android-developers.googleblog.com/feeds/posts/default/-/Games",
+        SourceType.ATOM,
+    ),
+    FeedSource(
+        "Apple Developer News",
+        "https://developer.apple.com/news/rss/news.rss",
+        SourceType.RSS,
+    ),
+    FeedSource(
+        "Hugging Face Blog",
+        "https://huggingface.co/blog/feed.xml",
+        SourceType.RSS,
+    ),
+    FeedSource("Inside.java", "https://inside.java/feed.xml"),
     FeedSource(
         "PostgreSQL News",
         "https://www.postgresql.org/news.rss",
         SourceType.RSS,
     ),
+    FeedSource("ByteByteGo", "https://blog.bytebytego.com/feed", SourceType.RSS),
+)
+
+DEFAULT_HTML_SOURCES = (
+    HtmlSource(
+        "GDC Vault",
+        "https://gdcvault.com/free/recent/?media=va",
+        "gdc_vault",
+    ),
+    HtmlSource(
+        "Advances in Real-Time Rendering",
+        "https://www.advances.realtimerendering.com/",
+        "realtime_rendering",
+    ),
+    HtmlSource(
+        "LinkedIn Engineering: Feed",
+        "https://www.linkedin.com/blog/engineering/feed",
+        "linkedin_engineering_feed",
+    ),
+    HtmlSource(
+        "GitHub Trending (weekly)",
+        "https://github.com/trending?since=weekly",
+        "github_trending",
+    ),
+)
+
+DEFAULT_X_SOURCES = (
+    XSource("dair_ai"),
+    XSource("Weyaxi"),
+    XSource("rasbt"),
+    XSource("karpathy"),
+    XSource("huggingface"),
 )
 
 
@@ -83,6 +179,14 @@ def default_github_release_sources() -> tuple[GitHubReleaseSource, ...]:
         GitHubReleaseSource(repository)
         for repository in DEFAULT_GITHUB_RELEASE_REPOSITORIES
     )
+
+
+def default_html_sources() -> tuple[HtmlSource, ...]:
+    return DEFAULT_HTML_SOURCES
+
+
+def default_x_sources() -> tuple[XSource, ...]:
+    return DEFAULT_X_SOURCES
 
 
 def fetch_feed_articles(
@@ -156,6 +260,190 @@ def fetch_github_release_articles(
             )
         )
     return articles
+
+
+def fetch_html_articles(
+    client: httpx.Client,
+    source: HtmlSource,
+    collected_at: datetime,
+    *,
+    limit: int | None = None,
+) -> list[RawArticle]:
+    response = client.get(source.url)
+    response.raise_for_status()
+    parser = _ArticleLinkParser(source.parser)
+    parser.feed(response.text)
+
+    return [
+        RawArticle(
+            source=source.name,
+            source_type=SourceType.HTML,
+            title=title,
+            url=urljoin(source.url, href),
+            collected_at=collected_at,
+            raw={"href": href},
+        )
+        for href, title in _limited(parser.articles, limit)
+    ]
+
+
+def fetch_x_articles(
+    client: httpx.Client,
+    source: XSource,
+    collected_at: datetime,
+    bearer_token: str,
+    *,
+    limit: int | None = None,
+) -> list[RawArticle]:
+    """Fetch recent public posts from one account through the official X API."""
+
+    max_results = max(10, min(limit or 10, 100))
+    response = client.get(
+        "https://api.x.com/2/tweets/search/recent",
+        headers={"Authorization": f"Bearer {bearer_token}"},
+        params={
+            "query": f"from:{source.username} -is:retweet",
+            "max_results": max_results,
+            "tweet.fields": "created_at,entities",
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+    posts = payload.get("data", []) if isinstance(payload, dict) else []
+
+    articles: list[RawArticle] = []
+    for post in _limited(posts, limit):
+        post_id = str(post.get("id", "")).strip()
+        text = _clean_text(post.get("text"))
+        if not post_id or not text:
+            continue
+        title = " ".join(text.split())
+        if len(title) > 160:
+            title = f"{title[:157].rstrip()}..."
+        published_at = None
+        if post.get("created_at"):
+            published_at = datetime.fromisoformat(
+                str(post["created_at"]).replace("Z", "+00:00")
+            )
+        articles.append(
+            RawArticle(
+                source=source.name,
+                source_type=SourceType.API,
+                title=title,
+                url=f"https://x.com/{source.username}/status/{post_id}",
+                summary=text,
+                author=f"@{source.username}",
+                published_at=published_at,
+                collected_at=collected_at,
+                raw=post,
+            )
+        )
+    return articles
+
+
+class _ArticleLinkParser(HTMLParser):
+    def __init__(self, parser: str) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parser = parser
+        self.articles: list[tuple[str, str]] = []
+        self._seen_hrefs: set[str] = set()
+        self._in_article = False
+        self._capture_depth = 0
+        self._href: str | None = None
+        self._text: list[str] = []
+
+    def handle_starttag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if self.parser == "github_trending":
+            if tag == "article" and "Box-row" in classes:
+                self._in_article = True
+        if self._capture_depth:
+            if tag == "img" and attributes.get("alt"):
+                self._text.append(attributes["alt"] or "")
+            if tag in {
+                "area",
+                "base",
+                "br",
+                "col",
+                "embed",
+                "hr",
+                "img",
+                "input",
+                "link",
+                "meta",
+                "source",
+                "track",
+                "wbr",
+            }:
+                return
+            self._capture_depth += 1
+            return
+        if tag != "a":
+            return
+        href = attributes.get("href")
+        is_trending_repository = (
+            self.parser == "github_trending"
+            and self._in_article
+            and bool(href)
+            and href.count("/") == 2
+            and not href.startswith(("/sponsors/", "/topics/"))
+        )
+        normalized_href = urlparse(href or "").path.lower().lstrip("/")
+        is_gdc_session = (
+            self.parser == "gdc_vault"
+            and bool(href)
+            and normalized_href.startswith("play/")
+        )
+        is_rendering_course = (
+            self.parser == "realtime_rendering"
+            and bool(href)
+            and normalized_href.startswith("s20")
+            and normalized_href.endswith(("/", ".html", ".htm"))
+        )
+        is_linkedin_article = (
+            self.parser == "linkedin_engineering_feed"
+            and "grid-post__link" in classes
+            and bool(href)
+        )
+        if (
+            is_trending_repository
+            or is_gdc_session
+            or is_rendering_course
+            or is_linkedin_article
+        ):
+            self._capture_depth = 1
+            self._href = href
+            self._text = []
+
+    def handle_endtag(self, tag: str) -> None:
+        if self._capture_depth:
+            if tag == "a" and self._capture_depth == 1:
+                title = " ".join("".join(self._text).split())
+                if self._href and title and self._href not in self._seen_hrefs:
+                    self.articles.append((self._href, title))
+                    self._seen_hrefs.add(self._href)
+                self._capture_depth = 0
+                self._href = None
+                self._text = []
+            else:
+                self._capture_depth -= 1
+        if self.parser == "github_trending" and tag == "article":
+            self._in_article = False
+
+    def handle_startendtag(
+        self, tag: str, attrs: list[tuple[str, str | None]]
+    ) -> None:
+        if self._capture_depth and tag == "img":
+            alt = dict(attrs).get("alt")
+            if alt:
+                self._text.append(alt)
+
+    def handle_data(self, data: str) -> None:
+        if self._capture_depth:
+            self._text.append(data)
 
 
 def _limited(items: Iterable[Any], limit: int | None) -> Iterable[Any]:

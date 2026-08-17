@@ -21,11 +21,17 @@ from dtns.collectors.models import RawArticle, RawArticlesDocument, SourceType
 from dtns.collectors.sources import (
     FeedSource,
     GitHubReleaseSource,
+    HtmlSource,
     InvalidFeedError,
+    XSource,
     default_feed_sources,
     default_github_release_sources,
+    default_html_sources,
+    default_x_sources,
     fetch_feed_articles,
     fetch_github_release_articles,
+    fetch_html_articles,
+    fetch_x_articles,
 )
 from dtns.contracts.collection_report import (
     CollectionReport,
@@ -35,7 +41,7 @@ from dtns.contracts.collection_report import (
 
 DEFAULT_ARTICLES_FILENAME = "articles.json"
 COLLECTION_REPORT_FILENAME = "collection_report.json"
-COLLECTOR_POLICY_VERSION = "1"
+COLLECTOR_POLICY_VERSION = "2"
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +55,9 @@ def collect_articles(
     *,
     feed_sources: tuple[FeedSource, ...] | None = None,
     github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    html_sources: tuple[HtmlSource, ...] | None = None,
+    x_sources: tuple[XSource, ...] | None = None,
+    x_bearer_token: str | None = None,
     limit_per_source: int | None = None,
     timeout_seconds: float = 20.0,
     source_run_id: str | None = None,
@@ -60,11 +69,17 @@ def collect_articles(
         feed_sources = default_feed_sources()
     if github_release_sources is None:
         github_release_sources = default_github_release_sources()
+    if html_sources is None:
+        html_sources = default_html_sources()
+    x_sources, x_bearer_token = _resolve_x_sources(x_sources, x_bearer_token)
     source_run_id = source_run_id or str(uuid.uuid4())
 
     result = _collect_articles(
         feed_sources=feed_sources,
         github_release_sources=github_release_sources,
+        html_sources=html_sources,
+        x_sources=x_sources,
+        x_bearer_token=x_bearer_token,
         limit_per_source=limit_per_source,
         timeout_seconds=timeout_seconds,
         source_run_id=source_run_id,
@@ -82,14 +97,21 @@ def _collect_articles(
     *,
     feed_sources: tuple[FeedSource, ...],
     github_release_sources: tuple[GitHubReleaseSource, ...],
+    html_sources: tuple[HtmlSource, ...],
+    x_sources: tuple[XSource, ...],
+    x_bearer_token: str | None,
     limit_per_source: int | None,
     timeout_seconds: float,
     source_run_id: str,
 ) -> _CollectionResult:
     started_at = datetime.now(UTC)
-    configured_sources: list[FeedSource | GitHubReleaseSource] = [
+    configured_sources: list[
+        FeedSource | GitHubReleaseSource | HtmlSource | XSource
+    ] = [
         *feed_sources,
         *github_release_sources,
+        *html_sources,
+        *x_sources,
     ]
     if not configured_sources:
         raise ValueError("At least one article source must be configured")
@@ -173,6 +195,79 @@ def _collect_articles(
                     http_status,
                 )
 
+        for source in html_sources:
+            try:
+                fetched = fetch_html_articles(
+                    client,
+                    source,
+                    started_at,
+                    limit=limit_per_source,
+                )
+                accepted = _dedupe_by_url(fetched)
+                articles.extend(accepted)
+                source_reports.append(
+                    _successful_source_report(
+                        source.name,
+                        SourceType.HTML,
+                        fetched_count=len(fetched),
+                        accepted_count=len(accepted),
+                    )
+                )
+            except Exception as exc:
+                error_category, http_status = _classify_error(exc)
+                source_reports.append(
+                    _failed_source_report(
+                        source.name,
+                        SourceType.HTML,
+                        error_category,
+                        http_status,
+                    )
+                )
+                logger.warning(
+                    "Skipping unavailable HTML source %s (category=%s, status=%s)",
+                    source.name,
+                    error_category,
+                    http_status,
+                )
+
+        for source in x_sources:
+            try:
+                if x_bearer_token is None:
+                    raise ValueError("X_BEARER_TOKEN is required for X sources")
+                fetched = fetch_x_articles(
+                    client,
+                    source,
+                    started_at,
+                    x_bearer_token,
+                    limit=limit_per_source,
+                )
+                accepted = _dedupe_by_url(fetched)
+                articles.extend(accepted)
+                source_reports.append(
+                    _successful_source_report(
+                        source.name,
+                        SourceType.API,
+                        fetched_count=len(fetched),
+                        accepted_count=len(accepted),
+                    )
+                )
+            except Exception as exc:
+                error_category, http_status = _classify_error(exc)
+                source_reports.append(
+                    _failed_source_report(
+                        source.name,
+                        SourceType.API,
+                        error_category,
+                        http_status,
+                    )
+                )
+                logger.warning(
+                    "Skipping unavailable X source %s (category=%s, status=%s)",
+                    source.name,
+                    error_category,
+                    http_status,
+                )
+
     successful_sources = sum(
         source.status != "failed" for source in source_reports
     )
@@ -208,6 +303,9 @@ def write_articles(
     *,
     feed_sources: tuple[FeedSource, ...] | None = None,
     github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    html_sources: tuple[HtmlSource, ...] | None = None,
+    x_sources: tuple[XSource, ...] | None = None,
+    x_bearer_token: str | None = None,
     limit_per_source: int | None = None,
     timeout_seconds: float = 20.0,
     source_run_id: str | None = None,
@@ -223,6 +321,9 @@ def write_articles(
     document = collect_articles(
         feed_sources=feed_sources,
         github_release_sources=github_release_sources,
+        html_sources=html_sources,
+        x_sources=x_sources,
+        x_bearer_token=x_bearer_token,
         limit_per_source=limit_per_source,
         timeout_seconds=timeout_seconds,
         source_run_id=run_id,
@@ -349,7 +450,7 @@ def _reported_feed_source_type(
 
 
 def _source_config_fingerprint(
-    sources: list[FeedSource | GitHubReleaseSource],
+    sources: list[FeedSource | GitHubReleaseSource | HtmlSource | XSource],
 ) -> str:
     payload = [
         {
@@ -357,6 +458,10 @@ def _source_config_fingerprint(
             "source_type": (
                 SourceType.GITHUB_RELEASE
                 if isinstance(source, GitHubReleaseSource)
+                else SourceType.HTML
+                if isinstance(source, HtmlSource)
+                else SourceType.API
+                if isinstance(source, XSource)
                 else _feed_source_type(source)
             ).value,
             "url": source.url,
@@ -376,6 +481,9 @@ def collector_policy_fingerprint(
     *,
     feed_sources: tuple[FeedSource, ...] | None = None,
     github_release_sources: tuple[GitHubReleaseSource, ...] | None = None,
+    html_sources: tuple[HtmlSource, ...] | None = None,
+    x_sources: tuple[XSource, ...] | None = None,
+    x_bearer_token: str | None = None,
     limit_per_source: int | None = None,
     timeout_seconds: float = 20.0,
 ) -> str:
@@ -389,10 +497,12 @@ def collector_policy_fingerprint(
         if github_release_sources is None
         else github_release_sources
     )
+    resolved_html = default_html_sources() if html_sources is None else html_sources
+    resolved_x, _ = _resolve_x_sources(x_sources, x_bearer_token)
     payload = {
         "policy_version": COLLECTOR_POLICY_VERSION,
         "source_config_fingerprint": _source_config_fingerprint(
-            [*resolved_feeds, *resolved_releases]
+            [*resolved_feeds, *resolved_releases, *resolved_html, *resolved_x]
         ),
         "limit_per_source": limit_per_source,
         "timeout_seconds": timeout_seconds,
@@ -406,6 +516,18 @@ def collector_policy_fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _resolve_x_sources(
+    x_sources: tuple[XSource, ...] | None,
+    x_bearer_token: str | None,
+) -> tuple[tuple[XSource, ...], str | None]:
+    token = (x_bearer_token or os.getenv("X_BEARER_TOKEN", "")).strip() or None
+    if x_sources is None:
+        return (default_x_sources() if token else ()), token
+    if x_sources and token is None:
+        raise ValueError("X_BEARER_TOKEN is required when X sources are configured")
+    return x_sources, token
 
 
 def _classify_error(

@@ -15,5 +15,11 @@ Expected sources:
 - InfoQ
 - OSS Insight
 - GitHub Releases
+- GitHub Trending (weekly)
 - Engineering blogs
 - Official project blogs
+- Game engine release feeds and game client development sources
+- GDC Vault and Advances in Real-Time Rendering HTML indexes
+- Hugging Face Blog
+- LinkedIn Engineering Feed and Inside.java
+- X accounts configured through the official API when `X_BEARER_TOKEN` is set

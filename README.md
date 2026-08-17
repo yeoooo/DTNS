@@ -16,14 +16,14 @@ DTNS는 서로 독립적으로 운영되는 세 가지 뉴스레터를 제공합
 |------|------|
 | `technology` | 소프트웨어 엔지니어링 전반의 기술 동향 및 생태계 트렌드 |
 | `backend` | 백엔드 개발, 인프라, API, 데이터 시스템 및 운영 기술 |
-| `qa` | QA, 테스트 자동화, 품질 관리(Quality Engineering) 관련 기술 |
+| `game_client` | 게임 클라이언트, 게임 엔진, 렌더링, 성능 및 플랫폼 개발 기술 |
 
 하나의 기사는 여러 주제에 동시에 포함될 수 있습니다.
 
 예를 들어,
 
 - OpenTelemetry 릴리스는 `technology`와 `backend`
-- Testcontainers 업데이트는 `backend`와 `qa`
+- Unreal Engine 렌더링 업데이트는 `technology`와 `game_client`
 
 처럼 다중 분류(Multi-label Classification)를 지원합니다.
 
@@ -47,17 +47,17 @@ tagged_articles.json
 Classifier
   ├─ technology_articles.json
   ├─ backend_articles.json
-  └─ qa_articles.json
+  └─ game_client_articles.json
 
 Trend Agent (주제별)
   ├─ technology_trends.json
   ├─ backend_trends.json
-  └─ qa_trends.json
+  └─ game_client_trends.json
 
 Editor Agent (주제별)
   ├─ technology_newsletter.md
   ├─ backend_newsletter.md
-  └─ qa_newsletter.md
+  └─ game_client_newsletter.md
 
 Publisher
   ↓
@@ -78,11 +78,17 @@ Discord Webhook 발행
 
 - AI 사용하지 않음
 - 일반 기술 뉴스: InfoQ, The New Stack, Martin Fowler
-- 엔지니어링 블로그: Netflix, Meta, GitHub, Cloudflare
+- 엔지니어링 블로그: Netflix, Meta, GitHub, Cloudflare, ByteByteGo
 - 공식 프로젝트 블로그: Spring, Kubernetes, OpenTelemetry
-- QA: Playwright
+- 게임 클라이언트: GDC Vault, Unreal Engine, Unity LTS Releases, Godot Engine,
+  AMD GPUOpen, NVIDIA Developer Blog, Microsoft DirectX, Game Developer,
+  Advances in Real-Time Rendering, Android Developers Games, Apple Developer News
+- AI 연구 큐레이션: Hugging Face Blog 및 선택적 X 계정(`@dair_ai`,
+  `@Weyaxi`, `@rasbt`, `@karpathy`, `@huggingface`)
+- Backend/Java: LinkedIn Engineering Feed, Inside.java
 - 데이터베이스: PostgreSQL News
 - GitHub Releases: Moby, Redis
+- GitHub Trending: 주간 인기 저장소
 
 `run-all`은 주간 실행의 처리량과 AI 비용을 제한하기 위해 출처별 최신 10건을
 수집합니다. `collect --limit-per-source N`으로 출처별 수집량을 직접 지정할 수
@@ -125,7 +131,7 @@ Tagger 결과를 기반으로
 
 - Technology
 - Backend
-- QA
+- Game Client
 
 세 가지 뉴스레터 주제로 결정론적(Multi-label) 분류를 수행합니다.
 
@@ -226,15 +232,15 @@ newsletter classify
 
 newsletter trend --topic technology
 newsletter trend --topic backend
-newsletter trend --topic qa
+newsletter trend --topic game_client
 
 newsletter edit --topic technology
 newsletter edit --topic backend
-newsletter edit --topic qa
+newsletter edit --topic game_client
 
 newsletter publish --topic technology
 newsletter publish --topic backend
-newsletter publish --topic qa
+newsletter publish --topic game_client
 
 newsletter run-all --limit-per-source 10
 ```
@@ -275,7 +281,13 @@ GEMINI_API_KEY=
 
 DISCORD_WEBHOOK_TECHNOLOGY=
 DISCORD_WEBHOOK_BACKEND=
-DISCORD_WEBHOOK_QA=
+DISCORD_WEBHOOK_GAME_CLIENT=
+```
+
+X 계정 수집은 선택 사항입니다. 공식 X API의 Bearer Token을 설정하면 활성화됩니다.
+
+```text
+X_BEARER_TOKEN=
 ```
 
 ---
