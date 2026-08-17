@@ -28,4 +28,4 @@ jobs:
           DTNS_PUBLISH_LABEL: ${{ github.ref == 'refs/heads/develop' && '🧪 테스트 발행' || '' }}
           DISCORD_WEBHOOK_TECHNOLOGY: ${{ secrets.DISCORD_WEBHOOK_TECHNOLOGY }}
           DISCORD_WEBHOOK_BACKEND: ${{ secrets.DISCORD_WEBHOOK_BACKEND }}
-          DISCORD_WEBHOOK_QA: ${{ secrets.DISCORD_WEBHOOK_QA }}
+          DISCORD_WEBHOOK_GAME_CLIENT: ${{ secrets.DISCORD_WEBHOOK_GAME_CLIENT }}
