@@ -45,6 +45,7 @@ MAX_RESPONSE_ATTEMPTS = 2
 MAX_OUTPUT_TOKENS = 8192
 GENERATION_TEMPERATURE = 0.2
 STATE_DIRECTORY = Path(".state") / "trend"
+CANDIDATE_ID_SCOPE_VERSION = "checkpoint-v1"
 
 
 class AIMetadata(BaseModel):
@@ -575,6 +576,7 @@ def _request_checkpoint(
                 allowed_article_ids=allowed_article_ids,
                 candidate_limit=candidate_limit,
             )
+            candidates = _scope_candidate_ids(candidates, checkpoint_id)
             if generation is not None:
                 accept = getattr(generation, "accept", None)
                 if callable(accept):
@@ -656,6 +658,19 @@ def _validate_candidates(
         if not set(candidate.article_ids) <= allowed_article_ids:
             raise TrendResponseError("id_mismatch")
     return candidates
+
+
+def _scope_candidate_ids(
+    candidates: Sequence[TrendCandidate],
+    checkpoint_id: str,
+) -> list[TrendCandidate]:
+    """Make model-generated IDs unique across independent checkpoints."""
+
+    namespace = hashlib.sha256(checkpoint_id.encode("utf-8")).hexdigest()[:12]
+    return [
+        candidate.model_copy(update={"id": f"{candidate.id}--{namespace}"})
+        for candidate in candidates
+    ]
 
 
 def _load_checkpoints(context: _RunContext) -> dict[str, TrendCheckpoint]:
@@ -834,6 +849,7 @@ def _policy_fingerprint(
             "reduce_batch": REDUCE_BATCH_SIZE, "reduce_candidates": REDUCE_CANDIDATE_LIMIT,
             "attempts": MAX_RESPONSE_ATTEMPTS, "output_tokens": MAX_OUTPUT_TOKENS,
         },
+        "candidate_id_scope": CANDIDATE_ID_SCOPE_VERSION,
         "generation": {"temperature": GENERATION_TEMPERATURE, "mime_type": "application/json"},
         "map_schema": _candidate_response_schema(MAP_CANDIDATE_LIMIT),
         "reduce_schema": _candidate_response_schema(REDUCE_CANDIDATE_LIMIT),
