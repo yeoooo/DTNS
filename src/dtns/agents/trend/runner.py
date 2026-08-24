@@ -45,7 +45,7 @@ MAX_RESPONSE_ATTEMPTS = 2
 MAX_OUTPUT_TOKENS = 8192
 GENERATION_TEMPERATURE = 0.2
 STATE_DIRECTORY = Path(".state") / "trend"
-CANDIDATE_ID_SCOPE_VERSION = "checkpoint-v1"
+CANDIDATE_ID_SCOPE_VERSION = "intermediate-checkpoint-v2"
 
 
 class AIMetadata(BaseModel):
@@ -666,6 +666,8 @@ def _scope_candidate_ids(
 ) -> list[TrendCandidate]:
     """Make model-generated IDs unique across independent checkpoints."""
 
+    if checkpoint_id == "reduce-final":
+        return list(candidates)
     namespace = hashlib.sha256(checkpoint_id.encode("utf-8")).hexdigest()[:12]
     return [
         candidate.model_copy(update={"id": f"{candidate.id}--{namespace}"})

@@ -979,7 +979,10 @@ def _request_draft(
             "temperature": GENERATION_TEMPERATURE,
             "max_output_tokens": MAX_OUTPUT_TOKENS,
             "response_mime_type": "application/json",
-            "response_json_schema": _draft_response_schema(),
+            "response_json_schema": _draft_response_schema(
+                trends_file,
+                topic_articles,
+            ),
         },
         client=client,
         run_id=run_id,
@@ -1058,10 +1061,16 @@ def _generate_valid_draft(
         except (ValidationError, ValueError) as error:
             last_error = error
             validation_feedback = _draft_validation_feedback(error)
-    raise ValueError("Editor draft generation failed content validation.") from last_error
+    failure = validation_feedback or "unknown_content_error"
+    raise ValueError(
+        f"Editor draft generation failed content validation: {failure}"
+    ) from last_error
 
 
-def _draft_response_schema() -> dict[str, Any]:
+def _draft_response_schema(
+    trends_file: TrendsFile | None = None,
+    topic_articles: list[TopicArticle] | None = None,
+) -> dict[str, Any]:
     """Gemini response schema without runtime-owned envelope fields."""
 
     schema = EditorDraft.model_json_schema()
@@ -1073,6 +1082,15 @@ def _draft_response_schema() -> dict[str, Any]:
         for field in schema["required"]
         if field not in {"schema_version", "topic", "generated_at"}
     ]
+    section_properties = schema["$defs"]["DraftTrendSection"]["properties"]
+    if trends_file is not None:
+        section_properties["trend_id"]["enum"] = [
+            trend.id for trend in trends_file.trends
+        ]
+    if topic_articles is not None:
+        section_properties["article_ids"]["items"]["enum"] = [
+            article.id for article in topic_articles
+        ]
     return schema
 
 
@@ -1424,7 +1442,7 @@ def _policy_fingerprint(
     resolved_fallback = fallback_model or DEFAULT_FALLBACK_MODEL
     policy = {
         "checkpoint_schema_version": SCHEMA_VERSION,
-        "validation_version": "4",
+        "validation_version": "5",
         "editor_draft_schema": EditorDraft.model_json_schema(),
         "renderer_policy": "editor-draft-to-newsletter-v1",
         "newsletter_contract": {

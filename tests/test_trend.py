@@ -57,7 +57,7 @@ def test_trend_scopes_repeated_candidate_ids_across_map_batches(tmp_path):
 
     assert client.phases == ["map"] * 5 + ["reduce"] * 3
     assert len(result.trends) == 1
-    assert result.trends[0].id.startswith("merged-trend--")
+    assert result.trends[0].id == "merged-trend"
 
     resumed = discover_trends(
         "game_client",
