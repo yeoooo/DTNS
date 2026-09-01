@@ -547,8 +547,8 @@ def test_editor_does_not_send_urls_and_renders_links_from_article_contract(tmp_p
     section_schema = request["config"]["response_json_schema"]["$defs"][
         "DraftTrendSection"
     ]["properties"]
-    assert section_schema["trend_id"]["enum"] == ["trend-0"]
-    assert section_schema["article_ids"]["items"]["enum"] == ["article-0"]
+    assert "enum" not in section_schema["trend_id"]
+    assert "enum" not in section_schema["article_ids"]["items"]
 
 
 def test_editor_retries_misplaced_article_id_with_id_only_feedback(tmp_path):
