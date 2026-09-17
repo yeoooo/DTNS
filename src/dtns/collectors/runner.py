@@ -24,6 +24,7 @@ from dtns.collectors.sources import (
     HtmlSource,
     InvalidFeedError,
     XSource,
+    _source_metadata,
     default_feed_sources,
     default_github_release_sources,
     default_html_sources,
@@ -501,6 +502,7 @@ def _source_config_fingerprint(
                 else _feed_source_type(source)
             ).value,
             "url": source.url,
+            "editorial_source": _source_metadata(source).model_dump(mode="json"),
         }
         for source in sources
     ]

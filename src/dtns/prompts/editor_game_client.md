@@ -20,6 +20,11 @@ Korean editorial draft.
 - Do not emit Markdown, HTML, URLs, links, emoji, or presentation markers.
 - Return the human-readable title without a heading marker or emoji.
 - Reference articles only by exact IDs supplied for the corresponding trend.
+- Center production implementation: the client problem, system limit, concrete
+  engine or custom-system change, trade-off, and performance result.
+- Use `technical_perspective` articles as context connecting cases and releases.
+- Do not elevate maps, skins, characters, items, events, or balance notes without
+  technical implementation evidence.
 
 ## Output
 

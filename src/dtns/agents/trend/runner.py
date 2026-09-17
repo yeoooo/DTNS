@@ -28,6 +28,13 @@ from dtns.agents.trend.checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
     TrendCandidate,
     TrendCheckpoint,
+    TrendArticleRole,
+)
+from dtns.contracts.content import (
+    ArticleEvaluation,
+    ArticleEvidence,
+    ArticleType,
+    SourceMetadata,
 )
 
 
@@ -59,6 +66,9 @@ class ClassificationMetadata(BaseModel):
     model_config = ConfigDict(extra="forbid")
     matched_rules: list[str] = Field(default_factory=list)
     score: float | None = Field(default=None, ge=0)
+    selection_score: float = Field(default=0, ge=0)
+    selected: bool = True
+    rejection_reasons: list[str] = Field(default_factory=list)
 
 
 class TopicArticle(BaseModel):
@@ -71,6 +81,12 @@ class TopicArticle(BaseModel):
     tags: list[str] = Field(default_factory=list)
     technologies: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    technical_topics: list[str] = Field(default_factory=list)
+    article_type: ArticleType = ArticleType.GENERAL_NEWS
+    evidence: ArticleEvidence = Field(default_factory=ArticleEvidence)
+    evaluation: ArticleEvaluation = Field(default_factory=ArticleEvaluation)
+    release_change_types: list[str] = Field(default_factory=list)
+    source_metadata: SourceMetadata | None = None
     ai_metadata: AIMetadata
     classification: ClassificationMetadata
     summary: str | None = None
@@ -82,7 +98,9 @@ class TopicArticle(BaseModel):
             raise ValueError("must not be empty")
         return value
 
-    @field_validator("tags", "technologies", "domains")
+    @field_validator(
+        "tags", "technologies", "domains", "technical_topics", "release_change_types"
+    )
     @classmethod
     def require_unique(cls, value: list[str]) -> list[str]:
         if len(value) != len(set(value)):
@@ -107,6 +125,7 @@ class Trend(BaseModel):
     why_it_matters: str = Field(min_length=1, max_length=500)
     article_ids: list[str] = Field(min_length=1, max_length=20)
     keywords: list[str] = Field(default_factory=list, max_length=8)
+    article_roles: list[TrendArticleRole] = Field(default_factory=list, max_length=20)
 
     @field_validator("article_ids", "keywords")
     @classmethod
@@ -120,6 +139,15 @@ class Trend(BaseModel):
     def limit_keywords(cls, value: list[str]) -> list[str]:
         if any(not item or len(item) > 80 for item in value):
             raise ValueError("keywords must contain 1 to 80 characters")
+        return value
+
+    @field_validator("article_roles")
+    @classmethod
+    def unique_role_articles(
+        cls, value: list[TrendArticleRole]
+    ) -> list[TrendArticleRole]:
+        if len({item.article_id for item in value}) != len(value):
+            raise ValueError("article roles must reference unique articles")
         return value
 
 
@@ -205,7 +233,7 @@ class GeminiTrendClient:
                 config={
                     "temperature": GENERATION_TEMPERATURE,
                     "response_mime_type": "application/json",
-                    "response_json_schema": _candidate_response_schema(
+                    "response_json_schema": _gemini_candidate_schema(
                         candidate_limit
                     ),
                     "max_output_tokens": MAX_OUTPUT_TOKENS,
@@ -657,6 +685,10 @@ def _validate_candidates(
     for candidate in candidates:
         if not set(candidate.article_ids) <= allowed_article_ids:
             raise TrendResponseError("id_mismatch")
+        if not {
+            role.article_id for role in candidate.article_roles
+        } <= set(candidate.article_ids):
+            raise TrendResponseError("id_mismatch")
     return candidates
 
 
@@ -792,6 +824,17 @@ def _project_article(article: TopicArticle) -> dict[str, Any]:
         "tags": article.tags[:6],
         "technologies": article.technologies[:6],
         "domains": article.domains[:4],
+        "technical_topics": article.technical_topics[:10],
+        "article_type": article.article_type.value,
+        "evidence": article.evidence.model_dump(mode="json"),
+        "evaluation": article.evaluation.model_dump(mode="json"),
+        "release_change_types": article.release_change_types[:8],
+        "source_metadata": (
+            article.source_metadata.model_dump(mode="json")
+            if article.source_metadata is not None
+            else None
+        ),
+        "classification": article.classification.model_dump(mode="json"),
     }
 
 
@@ -809,7 +852,7 @@ def _candidate_response_schema(limit: int) -> dict[str, Any]:
                     "additionalProperties": False,
                     "required": [
                         "id", "title", "importance", "summary",
-                        "why_it_matters", "article_ids", "keywords",
+                        "why_it_matters", "article_ids", "keywords", "article_roles",
                     ],
                     "properties": {
                         "id": {"type": "string", "minLength": 1},
@@ -826,11 +869,48 @@ def _candidate_response_schema(limit: int) -> dict[str, Any]:
                             "type": "array", "maxItems": 8, "uniqueItems": True,
                             "items": {"type": "string", "minLength": 1, "maxLength": 80},
                         },
+                        "article_roles": {
+                            "type": "array", "maxItems": 20,
+                            "items": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "required": ["article_id", "role"],
+                                "properties": {
+                                    "article_id": {"type": "string", "minLength": 1},
+                                    "role": {
+                                        "type": "string",
+                                        "enum": [
+                                            "production_case", "meaningful_release",
+                                            "technical_perspective", "supporting",
+                                        ],
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
             }
         },
     }
+
+
+def _gemini_candidate_schema(limit: int) -> dict[str, Any]:
+    """Keep API grammar small; strict local validation enforces all bounds."""
+
+    def simplify(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {
+                key: simplify(item)
+                for key, item in value.items()
+                if key not in {
+                    "minLength", "maxLength", "minItems", "maxItems", "uniqueItems"
+                }
+            }
+        if isinstance(value, list):
+            return [simplify(item) for item in value]
+        return value
+
+    return simplify(_candidate_response_schema(limit))
 
 
 def _policy_fingerprint(
@@ -840,6 +920,7 @@ def _policy_fingerprint(
     policy = {
         "checkpoint_schema_version": CHECKPOINT_SCHEMA_VERSION,
         "public_schema": TrendsFile.model_json_schema(),
+        "gemini_schema": _gemini_candidate_schema(REDUCE_CANDIDATE_LIMIT),
         "prompt": _build_system_prompt(topic),
         "models": {"primary": model, "fallback": resolved_fallback},
         "execution_policy_fingerprint": generation_policy_fingerprint(
@@ -899,6 +980,12 @@ def _validate_article_references(
     for trend in output.trends:
         if not set(trend.article_ids) <= known_ids:
             raise ValueError(f"trend '{trend.id}' references unknown article IDs")
+        if not {
+            role.article_id for role in trend.article_roles
+        } <= set(trend.article_ids):
+            raise ValueError(
+                f"trend '{trend.id}' has roles for unrelated article IDs"
+            )
 
 
 def _unpack_response(

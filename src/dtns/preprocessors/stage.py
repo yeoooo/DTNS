@@ -19,6 +19,8 @@ from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsp
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from dtns.contracts.content import SourceMetadata
+
 
 ARTICLES_FILENAME = "articles.json"
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
@@ -57,6 +59,7 @@ class RawArticle(BaseModel):
 
     source: str
     source_type: SourceType | None = None
+    source_metadata: SourceMetadata | None = None
     title: str
     url: str
     summary: str | None = None
@@ -92,6 +95,7 @@ class NormalizedArticle(BaseModel):
     published_at: datetime | None
     collected_at: datetime
     source_type: SourceType | None = None
+    source_metadata: SourceMetadata | None = None
     original_url: str | None = None
     summary: str | None = None
     author: str | None = None
@@ -201,6 +205,7 @@ def normalize_article(article: RawArticle) -> NormalizedArticle | None:
         id=stable_article_id(canonical_url),
         source=source,
         source_type=article.source_type,
+        source_metadata=article.source_metadata,
         title=title,
         canonical_url=canonical_url,
         original_url=article.url,

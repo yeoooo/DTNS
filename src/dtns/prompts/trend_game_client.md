@@ -26,3 +26,16 @@ memory management, mobile optimization, console development, and live service
 client architecture.
 
 Use article IDs to connect trends back to source articles.
+
+Do not produce an article list disguised as a trend. Prefer production devlogs
+that expose the problem, old-system limit, concrete implementation, trade-offs,
+and performance or operational result. Combine those cases with meaningful
+engine/SDK releases and technical perspectives when evidence permits. Populate
+`article_roles` for every related article using `production_case`,
+`meaningful_release`, `technical_perspective`, or `supporting`.
+
+Exclude maps, characters, items, skins, events, and routine balance patches
+without technical implementation detail. High-value evidence includes
+procedural animation, spatial audio redesign, rendering/animation bottlenecks,
+core-system or internal-tool rebuilds, custom systems, and engine or architecture
+migrations.

@@ -39,6 +39,7 @@ from dtns.agents.gemini import (
     generation_policy_fingerprint,
     resolve_fallback_model,
 )
+from dtns.contracts.content import ArticleEvaluation, ArticleEvidence, SourceMetadata
 
 
 TOPIC_TRENDS_FILENAME = "topic_trends.json"
@@ -108,6 +109,15 @@ class TrendPeriod(BaseModel):
     end: date
 
 
+class TrendArticleRole(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    article_id: str
+    role: Literal[
+        "production_case", "meaningful_release", "technical_perspective", "supporting"
+    ]
+
+
 class Trend(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -118,6 +128,7 @@ class Trend(BaseModel):
     why_it_matters: str
     article_ids: list[str] = Field(min_length=1)
     keywords: list[str] = Field(default_factory=list)
+    article_roles: list[TrendArticleRole] = Field(default_factory=list)
 
     @field_validator("id", "title", "summary", "why_it_matters")
     @classmethod
@@ -182,6 +193,9 @@ class ClassificationMetadata(BaseModel):
 
     matched_rules: list[str] = Field(default_factory=list)
     score: float | None = Field(default=None, ge=0)
+    selection_score: float = Field(default=0, ge=0)
+    selected: bool = True
+    rejection_reasons: list[str] = Field(default_factory=list)
 
     @field_validator("score", mode="before")
     @classmethod
@@ -202,6 +216,16 @@ class TopicArticle(BaseModel):
     tags: list[str] = Field(default_factory=list)
     technologies: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    technical_topics: list[str] = Field(default_factory=list)
+    article_type: Literal[
+        "production_case", "release", "engineering_deep_dive", "incident",
+        "migration", "benchmark", "research", "technical_synthesis",
+        "architecture_essay", "announcement", "general_news",
+    ] = "general_news"
+    evidence: ArticleEvidence = Field(default_factory=ArticleEvidence)
+    evaluation: ArticleEvaluation = Field(default_factory=ArticleEvaluation)
+    release_change_types: list[str] = Field(default_factory=list)
+    source_metadata: SourceMetadata | None = None
     ai_metadata: AIMetadata
     classification: ClassificationMetadata
     summary: str | None = None
@@ -1238,6 +1262,9 @@ def _build_input_payload(
                 "summary": trend.summary,
                 "why_it_matters": trend.why_it_matters,
                 "keywords": trend.keywords,
+                "article_roles": [
+                    role.model_dump(mode="json") for role in trend.article_roles
+                ],
                 "articles": [
                     _article_payload(articles_by_id[article_id])
                     for article_id in trend.article_ids
@@ -1251,6 +1278,9 @@ def _build_input_payload(
             "Keep technical names in English.",
             "Output JSON only and omit schema_version, topic, and generated_at.",
             "Summarize trends and explain why they matter.",
+            "Build a coherent flow: events, shared pattern, cause, engineer impact.",
+            "Use technical_perspective articles as context, not isolated summaries.",
+            "Weight evidence by article role, evaluation, and source priority.",
             "Summarize supplied article metadata without fully translating articles.",
             "Generate weekly insights based only on supplied trend and article data.",
             "Do not emit URLs, links, article titles, or unknown IDs.",
@@ -1275,6 +1305,16 @@ def _article_payload(article: TopicArticle) -> dict[str, Any]:
         "tags": article.tags,
         "technologies": article.technologies,
         "domains": article.domains,
+        "technical_topics": article.technical_topics,
+        "article_type": article.article_type,
+        "evidence": article.evidence.model_dump(mode="json"),
+        "evaluation": article.evaluation.model_dump(mode="json"),
+        "release_change_types": article.release_change_types,
+        "source_metadata": (
+            article.source_metadata.model_dump(mode="json")
+            if article.source_metadata is not None
+            else None
+        ),
     }
 
 

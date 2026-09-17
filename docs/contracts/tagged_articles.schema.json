@@ -47,6 +47,50 @@
             },
             "uniqueItems": true
           },
+          "technical_topics": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "article_type": { "type": "string", "enum": ["production_case", "release", "engineering_deep_dive", "incident", "migration", "benchmark", "research", "technical_synthesis", "architecture_essay", "announcement", "general_news"] },
+          "evidence": {
+            "type": "object",
+            "properties": {
+              "implementation_detail": { "type": "boolean" },
+              "has_metrics": { "type": "boolean" },
+              "has_tradeoff": { "type": "boolean" },
+              "has_production_problem": { "type": "boolean" },
+              "has_existing_limit": { "type": "boolean" },
+              "connects_multiple_sources": { "type": "boolean" },
+              "explains_why": { "type": "boolean" },
+              "provides_decision_criteria": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
+          "evaluation": {
+            "type": "object",
+            "properties": {
+              "technical_depth": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "practical_relevance": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "source_quality": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "ecosystem_impact": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "implementation_detail": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "release_significance": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "cross_cutting_relevance": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "decision_making_value": { "type": "integer", "minimum": 0, "maximum": 3 },
+              "trend_explanatory_power": { "type": "integer", "minimum": 0, "maximum": 3 }
+            },
+            "additionalProperties": false
+          },
+          "release_change_types": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+          "source_metadata": {
+            "type": "object",
+            "required": ["source_type", "source_priority", "source_name", "source_url"],
+            "properties": {
+              "source_type": { "type": "string", "enum": ["official_release", "engineering_blog", "developer_blog", "engine_case_study", "conference", "research_lab", "steam_devlog", "technical_media", "technical_synthesis", "discovery"] },
+              "source_priority": { "type": "string", "enum": ["high", "medium", "low"] },
+              "source_name": { "type": "string", "minLength": 1 },
+              "source_url": { "type": "string", "format": "uri" },
+              "is_discovery": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
           "ai_metadata": {
             "type": "object",
             "required": ["model", "confidence"],

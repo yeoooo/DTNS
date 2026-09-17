@@ -19,6 +19,10 @@ editorial draft.
 - Do not emit Markdown, HTML, URLs, links, emoji, or presentation markers.
 - Return the human-readable title without a heading marker or emoji.
 - Reference articles only by exact IDs supplied for the corresponding trend.
+- Structure each major trend around problem, old architecture limit, alternatives,
+  implementation, trade-off, and measured production result when evidence exists.
+- Use `technical_perspective` articles as context connecting cases and releases.
+- Give more space to high-signal evidence; do not summarize every article equally.
 
 ## Output
 

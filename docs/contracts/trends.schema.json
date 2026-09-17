@@ -50,6 +50,18 @@
             "type": "array",
             "items": { "type": "string" },
             "uniqueItems": true
+          },
+          "article_roles": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["article_id", "role"],
+              "properties": {
+                "article_id": { "type": "string" },
+                "role": { "type": "string", "enum": ["production_case", "meaningful_release", "technical_perspective", "supporting"] }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false

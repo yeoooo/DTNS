@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
+from dtns.contracts.content import SourceMetadata
+
 
 class SourceType(StrEnum):
     RSS = "rss"
@@ -22,6 +24,7 @@ class RawArticle(BaseModel):
 
     source: str
     source_type: SourceType | None = None
+    source_metadata: SourceMetadata | None = None
     title: str = Field(min_length=1)
     url: HttpUrl
     summary: str | None = None

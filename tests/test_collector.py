@@ -27,6 +27,8 @@ from dtns.collectors.sources import (
 
 
 EXPECTED_FEED_URLS = {
+    "https://openai.com/news/rss.xml",
+    "https://aws.amazon.com/blogs/architecture/feed/",
     "https://www.infoq.com/feed",
     "https://thenewstack.io/feed/",
     "https://martinfowler.com/feed.atom",

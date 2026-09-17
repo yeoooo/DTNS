@@ -29,6 +29,18 @@
             "type": "string",
             "enum": ["rss", "atom", "github_release", "api", "html"]
           },
+          "source_metadata": {
+            "type": "object",
+            "required": ["source_type", "source_priority", "source_name", "source_url"],
+            "properties": {
+              "source_type": { "type": "string", "enum": ["official_release", "engineering_blog", "developer_blog", "engine_case_study", "conference", "research_lab", "steam_devlog", "technical_media", "technical_synthesis", "discovery"] },
+              "source_priority": { "type": "string", "enum": ["high", "medium", "low"] },
+              "source_name": { "type": "string", "minLength": 1 },
+              "source_url": { "type": "string", "format": "uri" },
+              "is_discovery": { "type": "boolean" }
+            },
+            "additionalProperties": false
+          },
           "title": { "type": "string", "minLength": 1 },
           "canonical_url": { "type": "string", "format": "uri" },
           "original_url": { "type": "string", "format": "uri" },

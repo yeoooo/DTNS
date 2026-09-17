@@ -18,6 +18,11 @@ import feedparser
 import httpx
 
 from dtns.collectors.models import RawArticle, SourceType
+from dtns.contracts.content import (
+    EditorialSourceType,
+    SourceMetadata,
+    SourcePriority,
+)
 
 
 DEFAULT_GITHUB_RELEASE_REPOSITORIES = (
@@ -71,6 +76,7 @@ class XSource:
 
 
 DEFAULT_FEED_SOURCES = (
+    FeedSource("OpenAI News", "https://openai.com/news/rss.xml", SourceType.RSS),
     FeedSource("InfoQ", "https://www.infoq.com/feed", SourceType.RSS),
     FeedSource("The New Stack", "https://thenewstack.io/feed/", SourceType.RSS),
     FeedSource("Martin Fowler", "https://martinfowler.com/feed.atom", SourceType.ATOM),
@@ -82,6 +88,11 @@ DEFAULT_FEED_SOURCES = (
         SourceType.RSS,
     ),
     FeedSource("Cloudflare Blog", "https://blog.cloudflare.com/rss/", SourceType.RSS),
+    FeedSource(
+        "AWS Architecture Blog",
+        "https://aws.amazon.com/blogs/architecture/feed/",
+        SourceType.RSS,
+    ),
     FeedSource("Spring Blog", "https://spring.io/blog.atom", SourceType.ATOM),
     FeedSource("Kubernetes Blog", "https://kubernetes.io/feed.xml"),
     FeedSource(
@@ -208,6 +219,85 @@ DEFAULT_X_SOURCES = (
 )
 
 
+_HIGH_ENGINEERING_SOURCES = {
+    "AWS Architecture Blog",
+    "Cloudflare Blog",
+    "GitHub Engineering",
+    "LINE Engineering",
+    "LinkedIn Engineering: Feed",
+    "Meta Engineering",
+    "NAVER D2",
+    "Netflix TechBlog",
+    "Toss Tech",
+    "당근 기술 블로그",
+    "우아한형제들 기술블로그",
+}
+_HIGH_DEVELOPER_SOURCES = {
+    "AMD GPUOpen",
+    "Android Developers Blog: Games",
+    "Apple Developer News",
+    "Microsoft DirectX Developer Blog",
+    "NVIDIA Developer Blog: Graphics",
+    "Unreal Engine",
+}
+_HIGH_SYNTHESIS_SOURCES = {"Martin Fowler"}
+_HIGH_RESEARCH_SOURCES = {"Hugging Face Blog", "OpenAI News"}
+_HIGH_CONFERENCE_SOURCES = {"Advances in Real-Time Rendering", "GDC Vault"}
+_MEDIUM_TECHNICAL_MEDIA_SOURCES = {
+    "80 LEVEL",
+    "Game Developer",
+    "InfoQ",
+    "The New Stack",
+}
+
+
+def _source_metadata(
+    source: FeedSource | GitHubReleaseSource | HtmlSource | XSource,
+) -> SourceMetadata:
+    """Return deterministic editorial provenance for every configured source."""
+
+    if isinstance(source, GitHubReleaseSource) or source.name in {
+        "Godot Engine",
+        "Inside.java",
+        "Kubernetes Blog",
+        "OpenTelemetry Blog",
+        "PostgreSQL News",
+        "Spring Blog",
+        "Unity LTS Releases",
+    }:
+        source_type = EditorialSourceType.OFFICIAL_RELEASE
+        priority = SourcePriority.HIGH
+    elif source.name in _HIGH_ENGINEERING_SOURCES:
+        source_type = EditorialSourceType.ENGINEERING_BLOG
+        priority = SourcePriority.HIGH
+    elif source.name in _HIGH_DEVELOPER_SOURCES:
+        source_type = EditorialSourceType.DEVELOPER_BLOG
+        priority = SourcePriority.HIGH
+    elif source.name in _HIGH_SYNTHESIS_SOURCES:
+        source_type = EditorialSourceType.TECHNICAL_SYNTHESIS
+        priority = SourcePriority.HIGH
+    elif source.name in _HIGH_RESEARCH_SOURCES:
+        source_type = EditorialSourceType.RESEARCH_LAB
+        priority = SourcePriority.HIGH
+    elif source.name in _HIGH_CONFERENCE_SOURCES:
+        source_type = EditorialSourceType.CONFERENCE
+        priority = SourcePriority.HIGH
+    elif source.name in _MEDIUM_TECHNICAL_MEDIA_SOURCES:
+        source_type = EditorialSourceType.TECHNICAL_MEDIA
+        priority = SourcePriority.MEDIUM
+    else:
+        source_type = EditorialSourceType.DISCOVERY
+        priority = SourcePriority.LOW
+
+    return SourceMetadata(
+        source_type=source_type,
+        source_priority=priority,
+        source_name=source.name,
+        source_url=source.url,
+        is_discovery=source_type == EditorialSourceType.DISCOVERY,
+    )
+
+
 def default_feed_sources() -> tuple[FeedSource, ...]:
     return DEFAULT_FEED_SOURCES
 
@@ -250,6 +340,7 @@ def fetch_feed_articles(
             RawArticle(
                 source=_source_name(source, feed),
                 source_type=source_type,
+                source_metadata=_source_metadata(source),
                 title=title,
                 url=url,
                 summary=_clean_text(
@@ -288,6 +379,7 @@ def fetch_github_release_articles(
             RawArticle(
                 source=source.name,
                 source_type=SourceType.GITHUB_RELEASE,
+                source_metadata=_source_metadata(source),
                 title=title,
                 url=url,
                 summary=_clean_text(entry.get("summary")),
@@ -316,6 +408,7 @@ def fetch_html_articles(
         RawArticle(
             source=source.name,
             source_type=SourceType.HTML,
+            source_metadata=_source_metadata(source),
             title=title,
             url=urljoin(source.url, href),
             collected_at=collected_at,
@@ -367,6 +460,7 @@ def fetch_x_articles(
             RawArticle(
                 source=source.name,
                 source_type=SourceType.API,
+                source_metadata=_source_metadata(source),
                 title=title,
                 url=f"https://x.com/{source.username}/status/{post_id}",
                 summary=text,

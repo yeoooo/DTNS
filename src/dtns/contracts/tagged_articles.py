@@ -8,6 +8,13 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from dtns.contracts.content import (
+    ArticleEvaluation,
+    ArticleEvidence,
+    ArticleType,
+    SourceMetadata,
+)
+
 
 SCHEMA_VERSION = "1.0"
 
@@ -22,6 +29,7 @@ class NormalizedArticle(BaseModel):
     published_at: datetime | None
     collected_at: datetime
     source_type: str | None = None
+    source_metadata: SourceMetadata | None = None
     original_url: str | None = None
     summary: str | None = None
     author: str | None = None
@@ -63,6 +71,12 @@ class TaggedArticle(BaseModel):
     tags: list[str]
     technologies: list[str]
     domains: list[str]
+    technical_topics: list[str] = Field(default_factory=list)
+    article_type: ArticleType = ArticleType.GENERAL_NEWS
+    evidence: ArticleEvidence = Field(default_factory=ArticleEvidence)
+    evaluation: ArticleEvaluation = Field(default_factory=ArticleEvaluation)
+    release_change_types: list[str] = Field(default_factory=list)
+    source_metadata: SourceMetadata | None = None
     ai_metadata: AIMetadata
     summary: str | None = None
 

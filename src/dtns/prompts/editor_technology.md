@@ -19,6 +19,11 @@ Korean editorial draft.
 - Do not emit Markdown, HTML, URLs, links, emoji, or presentation markers.
 - Return the human-readable title without a heading marker or emoji.
 - Reference articles only by exact IDs supplied for the corresponding trend.
+- Structure the issue as what happened, the shared movement, why it is happening,
+  and what it changes for engineering decisions.
+- Use `technical_perspective` articles to interpret production cases and releases,
+  not as another equal-weight summary item.
+- Prefer ecosystem shifts over isolated product announcements.
 
 ## Output
 

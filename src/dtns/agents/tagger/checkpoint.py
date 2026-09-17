@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
+from dtns.contracts.content import ArticleEvaluation, ArticleEvidence
+
 
 CHECKPOINT_SCHEMA_VERSION = "1.0"
 Fingerprint = Annotated[str, StringConstraints(pattern=r"^[a-f0-9]{64}$")]
@@ -38,9 +40,28 @@ class CheckpointArticle(BaseModel):
     tags: list[NonEmptyString] = Field(max_length=6)
     technologies: list[NonEmptyString] = Field(max_length=6)
     domains: list[NonEmptyString] = Field(max_length=4)
+    technical_topics: list[NonEmptyString] = Field(default_factory=list, max_length=10)
+    article_type: Literal[
+        "production_case",
+        "release",
+        "engineering_deep_dive",
+        "incident",
+        "migration",
+        "benchmark",
+        "research",
+        "technical_synthesis",
+        "architecture_essay",
+        "announcement",
+        "general_news",
+    ] = "general_news"
+    evidence: ArticleEvidence = Field(default_factory=ArticleEvidence)
+    evaluation: ArticleEvaluation = Field(default_factory=ArticleEvaluation)
+    release_change_types: list[NonEmptyString] = Field(default_factory=list, max_length=8)
     ai_metadata: CheckpointAIMetadata
 
-    @field_validator("tags", "technologies", "domains")
+    @field_validator(
+        "tags", "technologies", "domains", "technical_topics", "release_change_types"
+    )
     @classmethod
     def require_unique_values(cls, values: list[str]) -> list[str]:
         return _require_unique(values)

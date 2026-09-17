@@ -4,6 +4,31 @@ import json
 from datetime import UTC, datetime
 
 from dtns.agents.trend.runner import MAP_BATCH_SIZE, discover_trends
+from dtns.agents.trend.runner import (
+    _gemini_candidate_schema,
+    _validate_candidates,
+    TrendResponseError,
+)
+import pytest
+
+
+def test_gemini_schema_keeps_structure_without_expensive_bounds():
+    schema = _gemini_candidate_schema(4)
+    candidate = schema["properties"]["candidates"]
+    assert "maxItems" not in candidate
+    assert "article_roles" in candidate["items"]["required"]
+    assert candidate["items"]["properties"]["article_roles"]["items"][
+        "properties"
+    ]["role"]["enum"]
+
+
+def test_local_validation_still_enforces_candidate_limit():
+    with pytest.raises(TrendResponseError):
+        _validate_candidates(
+            {"candidates": [_candidate("a", ["article"])] * 5},
+            allowed_article_ids={"article"},
+            candidate_limit=4,
+        )
 
 
 class RepeatedCandidateIdClient:

@@ -79,7 +79,9 @@ No AI.
 Collects raw article candidates from feeds and APIs such as InfoQ, OSS Insight,
 GitHub Releases, engineering blogs, and official project blogs.
 
-The collector should preserve source metadata and avoid editorial judgment.
+The collector preserves transport metadata and assigns deterministic editorial
+source provenance (`source_type`, priority, name, and origin URL). It avoids
+article-level editorial judgment.
 
 ### Preprocessor
 
@@ -95,7 +97,9 @@ Stable IDs should be deterministic from canonical URL when available.
 Uses AI.
 
 Reads normalized articles and attaches technologies, domains, technical tags,
-summary metadata, and confidence values. The agent writes JSON only.
+summary metadata, article type, technical evidence, bounded evaluation signals,
+and confidence values. It does not choose topics or final inclusion. The agent
+writes JSON only.
 
 ### Classifier
 
@@ -103,14 +107,16 @@ Prefer deterministic logic.
 
 Reads tagged articles and writes three topic files. Classification rules should
 be transparent and testable. Use tags, domains, known technology maps, and source
-metadata before considering any future AI fallback.
+metadata before considering any future AI fallback. It also applies the
+deterministic signal-to-noise and meaningful-release policy.
 
 ### Trend Agent
 
 Uses AI.
 
 Runs independently for each topic. It clusters articles, discovers weekly
-trends, assigns importance, and writes trend JSON. It does not generate
+trends, assigns importance, records evidence roles, and writes trend JSON. It
+uses synthesis articles as context for cases and releases. It does not generate
 Markdown and does not publish.
 
 ### Editor Agent

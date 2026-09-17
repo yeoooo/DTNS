@@ -18,17 +18,27 @@ from dtns.contracts.tagged_articles import (
     TaggedArticle,
     TaggedArticlesDocument,
 )
+from dtns.contracts.content import (
+    ArticleEvaluation,
+    ArticleEvidence,
+    ArticleType,
+    MEANINGFUL_RELEASE_CHANGES,
+    SourceMetadata,
+)
 
 
 TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
 TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
 TOPICS = ("technology", "backend", "game_client")
-CLASSIFIER_POLICY_VERSION = "1"
+CLASSIFIER_POLICY_VERSION = "2"
 logger = logging.getLogger(__name__)
 
 Topic = Literal["technology", "backend", "game_client"]
 
 TECHNOLOGY_TERMS = {
+    "agent",
+    "agent evaluation",
+    "agent-evaluation",
     "ai",
     "ai engineering",
     "architecture",
@@ -37,6 +47,8 @@ TECHNOLOGY_TERMS = {
     "databases",
     "framework",
     "infrastructure",
+    "llm",
+    "ai infrastructure",
     "language",
     "open source",
     "opentelemetry",
@@ -49,12 +61,21 @@ BACKEND_TERMS = {
     "apis",
     "backend",
     "distributed systems",
+    "distributed-system",
+    "caching",
+    "concurrency",
+    "consistency",
     "go",
     "java",
     "jvm",
     "kafka",
     "kotlin",
     "observability",
+    "backpressure",
+    "load shedding",
+    "rate limiting",
+    "reliability",
+    "scalability",
     "opentelemetry",
     "postgresql",
     "python backend",
@@ -74,9 +95,20 @@ GAME_CLIENT_TERMS = {
     "gameplay",
     "godot",
     "graphics",
+    "audio",
+    "asset pipeline",
+    "engine architecture",
+    "gpu",
+    "input",
+    "memory",
+    "networking",
+    "physics",
+    "platform optimization",
     "mobile game",
     "rendering",
     "shader",
+    "tooling",
+    "ui",
     "unity",
     "unreal engine",
     "ue5",
@@ -99,6 +131,9 @@ class ClassificationMetadata(BaseModel):
 
     matched_rules: list[str] = Field(default_factory=list)
     score: float = Field(default=0, ge=0)
+    selection_score: float = Field(default=0, ge=0)
+    selected: bool = True
+    rejection_reasons: list[str] = Field(default_factory=list)
 
 
 class TopicArticle(BaseModel):
@@ -112,11 +147,19 @@ class TopicArticle(BaseModel):
     tags: list[str] = Field(default_factory=list)
     technologies: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    technical_topics: list[str] = Field(default_factory=list)
+    article_type: ArticleType = ArticleType.GENERAL_NEWS
+    evidence: ArticleEvidence = Field(default_factory=ArticleEvidence)
+    evaluation: ArticleEvaluation = Field(default_factory=ArticleEvaluation)
+    release_change_types: list[str] = Field(default_factory=list)
+    source_metadata: SourceMetadata | None = None
     ai_metadata: AIMetadata
     classification: ClassificationMetadata
     summary: str | None = None
 
-    @field_validator("tags", "technologies", "domains")
+    @field_validator(
+        "tags", "technologies", "domains", "technical_topics", "release_change_types"
+    )
     @classmethod
     def require_unique_strings(cls, value: list[str]) -> list[str]:
         if len(value) != len(set(value)):
@@ -203,7 +246,7 @@ def classify_tagged_articles(
     for article in articles:
         for topic in TOPICS:
             classification = classify_article_for_topic(article, topic)
-            if classification.score <= 0:
+            if classification.score <= 0 or not classification.selected:
                 continue
             topic_articles[topic].append(
                 TopicArticle(
@@ -216,6 +259,12 @@ def classify_tagged_articles(
                     tags=article.tags,
                     technologies=article.technologies,
                     domains=article.domains,
+                    technical_topics=article.technical_topics,
+                    article_type=article.article_type,
+                    evidence=article.evidence,
+                    evaluation=article.evaluation,
+                    release_change_types=article.release_change_types,
+                    source_metadata=article.source_metadata,
                     ai_metadata=article.ai_metadata,
                     classification=classification,
                 )
@@ -242,9 +291,13 @@ def classify_article_for_topic(
     matched_rules = sorted(
         f"{topic}:term:{term}" for term in rules if term in terms
     )
+    selection_score, rejection_reasons = _selection_decision(article, topic)
     return ClassificationMetadata(
         matched_rules=matched_rules,
         score=float(len(matched_rules)),
+        selection_score=selection_score,
+        selected=bool(matched_rules) and not rejection_reasons,
+        rejection_reasons=rejection_reasons,
     )
 
 
@@ -253,6 +306,7 @@ def _article_terms(article: TaggedArticle) -> set[str]:
     values.extend(article.tags)
     values.extend(article.technologies)
     values.extend(article.domains)
+    values.extend(article.technical_topics)
     values.append(article.source)
     values.append(article.title)
     if article.summary:
@@ -263,6 +317,103 @@ def _article_terms(article: TaggedArticle) -> set[str]:
         lowered = value.casefold()
         terms.add(lowered)
     return terms
+
+
+def _selection_decision(
+    article: TaggedArticle,
+    topic: Topic,
+) -> tuple[float, list[str]]:
+    """Apply deterministic signal-to-noise policy after topic matching."""
+
+    if _is_legacy_enrichment(article):
+        return 1.0, []
+
+    evaluation = article.evaluation
+    selection_score = float(
+        evaluation.technical_depth
+        + evaluation.practical_relevance
+        + evaluation.source_quality
+        + evaluation.ecosystem_impact
+        + evaluation.implementation_detail
+        + evaluation.release_significance
+        + evaluation.cross_cutting_relevance
+        + evaluation.decision_making_value
+        + evaluation.trend_explanatory_power
+    )
+    reasons: list[str] = []
+
+    if article.article_type == ArticleType.RELEASE:
+        meaningful = set(article.release_change_types) & MEANINGFUL_RELEASE_CHANGES
+        if not meaningful:
+            reasons.append("release:not-meaningful")
+
+    if article.article_type in {ArticleType.ANNOUNCEMENT, ArticleType.GENERAL_NEWS}:
+        if (
+            evaluation.technical_depth < 2
+            and evaluation.practical_relevance < 2
+            and evaluation.ecosystem_impact < 2
+        ):
+            reasons.append("content:low-technical-signal")
+
+    if topic == "game_client" and _is_game_content_update(article):
+        reasons.append("game_client:content-update-without-implementation")
+
+    threshold = 8.0
+    if article.article_type in {
+        ArticleType.PRODUCTION_CASE,
+        ArticleType.INCIDENT,
+        ArticleType.MIGRATION,
+    } and (
+        article.evidence.implementation_detail
+        and (
+            article.evidence.has_production_problem
+            or article.evidence.has_tradeoff
+            or article.evidence.has_metrics
+        )
+    ):
+        threshold = 6.0
+    elif article.article_type in {
+        ArticleType.TECHNICAL_SYNTHESIS,
+        ArticleType.ARCHITECTURE_ESSAY,
+    } and (
+        article.evidence.explains_why
+        and (
+            article.evidence.connects_multiple_sources
+            or article.evidence.provides_decision_criteria
+        )
+    ):
+        threshold = 6.0
+    elif article.article_type == ArticleType.RELEASE:
+        threshold = 6.0
+
+    if selection_score < threshold:
+        reasons.append(f"selection:score-below-{int(threshold)}")
+    return selection_score, reasons
+
+
+def _is_game_content_update(article: TaggedArticle) -> bool:
+    terms = " ".join(
+        [article.title, *(article.tags or []), *(article.technical_topics or [])]
+    ).casefold()
+    content_terms = {
+        "balance patch", "balancing", "new map", "new character", "new item",
+        "skin", "event", "battle pass", "content update",
+    }
+    return (
+        any(term in terms for term in content_terms)
+        and not article.evidence.implementation_detail
+    )
+
+
+def _is_legacy_enrichment(article: TaggedArticle) -> bool:
+    return (
+        article.source_metadata is None
+        and article.article_type == ArticleType.GENERAL_NEWS
+        and not article.technical_topics
+        and not article.release_change_types
+        and article.evaluation == ArticleEvaluation()
+        and article.evidence == ArticleEvidence()
+    )
 
 
 def classifier_policy_fingerprint() -> str:

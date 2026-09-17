@@ -12,6 +12,8 @@ Schema files:
 - `tagged_articles.schema.json`: tagger output.
 - `topic_articles.schema.json`: classifier output for one topic.
 - `trends.schema.json`: trend agent output for one topic.
+- `content_selection.md`: source provenance, article evaluation, deterministic
+  selection, and Trend evidence-role boundary.
 
 Markdown contract:
 

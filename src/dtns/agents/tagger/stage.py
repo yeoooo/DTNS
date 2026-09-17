@@ -42,6 +42,7 @@ from dtns.contracts.tagged_articles import (
     TaggedArticle,
     TaggedArticlesDocument,
 )
+from dtns.contracts.content import ArticleEvaluation, ArticleEvidence
 
 
 NORMALIZED_ARTICLES_FILENAME = "normalized_articles.json"
@@ -470,14 +471,23 @@ def _validate_batch_output(
     validated: list[CheckpointArticle] = []
     for article_id in requested_ids:
         item = dict(by_id[article_id])
-        expected_fields = {
+        required_fields = {
             "id",
             "tags",
             "technologies",
             "domains",
             "ai_metadata",
         }
-        if set(item) != expected_fields:
+        optional_fields = {
+            "technical_topics",
+            "article_type",
+            "evidence",
+            "evaluation",
+            "release_change_types",
+        }
+        if not required_fields <= set(item) or not set(item) <= (
+            required_fields | optional_fields
+        ):
             raise BatchResponseError(
                 "invalid_schema",
                 f"Article {article_id} contains unexpected or missing fields",
@@ -496,12 +506,35 @@ def _validate_batch_output(
             )
         metadata["model"] = model
         try:
+            evaluation = ArticleEvaluation.model_validate(item.get("evaluation", {}))
+            source = next(article for article in articles if article.id == article_id)
+            source_quality = {
+                "high": 3,
+                "medium": 2,
+                "low": 1,
+            }.get(
+                source.source_metadata.source_priority.value
+                if source.source_metadata is not None
+                else "",
+                evaluation.source_quality,
+            )
             validated.append(
                 CheckpointArticle(
                     id=article_id,
                     tags=_normalize_string_list(item.get("tags")),
                     technologies=_normalize_string_list(item.get("technologies")),
                     domains=_normalize_string_list(item.get("domains")),
+                    technical_topics=_normalize_string_list(
+                        item.get("technical_topics", [])
+                    ),
+                    article_type=item.get("article_type", "general_news"),
+                    evidence=ArticleEvidence.model_validate(item.get("evidence", {})),
+                    evaluation=evaluation.model_copy(
+                        update={"source_quality": source_quality}
+                    ),
+                    release_change_types=_normalize_string_list(
+                        item.get("release_change_types", [])
+                    ),
                     ai_metadata=CheckpointAIMetadata.model_validate(metadata),
                 )
             )
@@ -609,6 +642,12 @@ def _finalize_document(
                 tags=result.tags,
                 technologies=result.technologies,
                 domains=result.domains,
+                technical_topics=result.technical_topics,
+                article_type=result.article_type,
+                evidence=result.evidence,
+                evaluation=result.evaluation,
+                release_change_types=result.release_change_types,
+                source_metadata=source.source_metadata,
                 ai_metadata=AIMetadata.model_validate(
                     result.ai_metadata.model_dump(mode="json", exclude_none=True)
                 ),
@@ -949,6 +988,11 @@ def _tagger_response_schema() -> dict[str, Any]:
                         "tags",
                         "technologies",
                         "domains",
+                        "technical_topics",
+                        "article_type",
+                        "evidence",
+                        "evaluation",
+                        "release_change_types",
                         "ai_metadata",
                     ],
                     "properties": {
@@ -959,6 +1003,55 @@ def _tagger_response_schema() -> dict[str, Any]:
                             "maxItems": MAX_TECHNOLOGIES,
                         },
                         "domains": {**string_array, "maxItems": MAX_DOMAINS},
+                        "technical_topics": {**string_array, "maxItems": 10},
+                        "article_type": {
+                            "type": "string",
+                            "enum": [
+                                "production_case", "release",
+                                "engineering_deep_dive", "incident", "migration",
+                                "benchmark", "research", "technical_synthesis",
+                                "architecture_essay", "announcement", "general_news",
+                            ],
+                        },
+                        "evidence": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "implementation_detail", "has_metrics", "has_tradeoff",
+                                "has_production_problem", "has_existing_limit",
+                                "connects_multiple_sources", "explains_why",
+                                "provides_decision_criteria",
+                            ],
+                            "properties": {
+                                name: {"type": "boolean"}
+                                for name in (
+                                    "implementation_detail", "has_metrics", "has_tradeoff",
+                                    "has_production_problem", "has_existing_limit",
+                                    "connects_multiple_sources", "explains_why",
+                                    "provides_decision_criteria",
+                                )
+                            },
+                        },
+                        "evaluation": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "technical_depth", "practical_relevance", "source_quality",
+                                "ecosystem_impact", "implementation_detail",
+                                "release_significance", "cross_cutting_relevance",
+                                "decision_making_value", "trend_explanatory_power",
+                            ],
+                            "properties": {
+                                name: {"type": "integer", "minimum": 0, "maximum": 3}
+                                for name in (
+                                    "technical_depth", "practical_relevance", "source_quality",
+                                    "ecosystem_impact", "implementation_detail",
+                                    "release_significance", "cross_cutting_relevance",
+                                    "decision_making_value", "trend_explanatory_power",
+                                )
+                            },
+                        },
+                        "release_change_types": {**string_array, "maxItems": 8},
                         "ai_metadata": {
                             "type": "object",
                             "additionalProperties": False,
