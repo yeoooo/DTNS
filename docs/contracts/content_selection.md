@@ -64,6 +64,11 @@ and stable `rejection_reasons` in `classification`.
 Only selected articles are written to topic files. One article may be selected
 for multiple topics.
 
+GitHub weekly Trending repositories are an explicit Technology exception: all
+items from `GitHub Trending (weekly)` are selected for `technology` regardless
+of AI tags or editorial-score thresholds. This keeps the weekly ranking
+available for the deterministic Top 5 newsletter section.
+
 ## Trend evidence roles
 
 Each Trend keeps `article_ids` and may additionally assign each article one role:
@@ -86,4 +91,3 @@ roles. It writes Korean editorial prose in this order: what happened, the shared
 pattern, why it is happening, and what it changes for engineering decisions.
 It does not give every article equal weight and does not invent details missing
 from upstream artifacts.
-

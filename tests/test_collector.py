@@ -178,7 +178,7 @@ def test_default_sources_match_configured_source_list():
                 "github_trending",
             ),
             '<article class="Box-row"><h2><a href="/owner/repo">'
-            "owner / repo</a></h2></article>",
+            "owner / repo</a></h2><p>Helpful repository description.</p></article>",
             "https://github.com/owner/repo",
             "owner / repo",
         ),
@@ -214,6 +214,8 @@ def test_fetch_html_articles_extracts_source_links(
     assert str(articles[0].url) == expected_url
     assert articles[0].title == expected_title
     assert articles[0].source_type.value == "html"
+    if source.parser == "github_trending":
+        assert articles[0].summary == "Helpful repository description."
 
 
 def test_fetch_x_articles_uses_official_api_and_maps_posts():

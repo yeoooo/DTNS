@@ -411,10 +411,11 @@ def fetch_html_articles(
             source_metadata=_source_metadata(source),
             title=title,
             url=urljoin(source.url, href),
+            summary=summary,
             collected_at=collected_at,
             raw={"href": href},
         )
-        for href, title in _limited(parser.articles, limit)
+        for href, title, summary in _limited(parser.articles, limit)
     ]
 
 
@@ -477,12 +478,15 @@ class _ArticleLinkParser(HTMLParser):
     def __init__(self, parser: str) -> None:
         super().__init__(convert_charrefs=True)
         self.parser = parser
-        self.articles: list[tuple[str, str]] = []
+        self.articles: list[tuple[str, str, str | None]] = []
         self._seen_hrefs: set[str] = set()
         self._in_article = False
         self._capture_depth = 0
         self._href: str | None = None
         self._text: list[str] = []
+        self._github_repository: tuple[str, str] | None = None
+        self._github_description_depth = 0
+        self._github_description: list[str] = []
 
     def handle_starttag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -492,6 +496,14 @@ class _ArticleLinkParser(HTMLParser):
         if self.parser == "github_trending":
             if tag == "article" and "Box-row" in classes:
                 self._in_article = True
+                self._github_repository = None
+                self._github_description_depth = 0
+                self._github_description = []
+            elif self._in_article and tag == "p":
+                self._github_description_depth = 1
+            elif self._github_description_depth:
+                self._github_description_depth += 1
+                return
         if self._capture_depth:
             if tag == "img" and attributes.get("alt"):
                 self._text.append(attributes["alt"] or "")
@@ -563,15 +575,29 @@ class _ArticleLinkParser(HTMLParser):
             if tag == "a" and self._capture_depth == 1:
                 title = " ".join("".join(self._text).split())
                 if self._href and title and self._href not in self._seen_hrefs:
-                    self.articles.append((self._href, title))
-                    self._seen_hrefs.add(self._href)
+                    if self.parser == "github_trending":
+                        self._github_repository = (self._href, title)
+                    else:
+                        self.articles.append((self._href, title, None))
+                        self._seen_hrefs.add(self._href)
                 self._capture_depth = 0
                 self._href = None
                 self._text = []
             else:
                 self._capture_depth -= 1
         if self.parser == "github_trending" and tag == "article":
+            if self._github_repository is not None:
+                href, title = self._github_repository
+                if href not in self._seen_hrefs:
+                    summary = " ".join("".join(self._github_description).split())
+                    self.articles.append((href, title, summary or None))
+                    self._seen_hrefs.add(href)
             self._in_article = False
+            self._github_repository = None
+            self._github_description_depth = 0
+            self._github_description = []
+        elif self._github_description_depth:
+            self._github_description_depth -= 1
 
     def handle_startendtag(
         self, tag: str, attrs: list[tuple[str, str | None]]
@@ -584,6 +610,8 @@ class _ArticleLinkParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._capture_depth:
             self._text.append(data)
+        elif self._github_description_depth:
+            self._github_description.append(data)
 
 
 def _limited(items: Iterable[Any], limit: int | None) -> Iterable[Any]:

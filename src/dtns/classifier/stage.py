@@ -30,7 +30,8 @@ from dtns.contracts.content import (
 TAGGED_ARTICLES_FILENAME = "tagged_articles.json"
 TOPIC_ARTICLES_FILENAME_TEMPLATE = "{topic}_articles.json"
 TOPICS = ("technology", "backend", "game_client")
-CLASSIFIER_POLICY_VERSION = "2"
+CLASSIFIER_POLICY_VERSION = "3"
+GITHUB_TRENDING_SOURCE = "GitHub Trending (weekly)"
 logger = logging.getLogger(__name__)
 
 Topic = Literal["technology", "backend", "game_client"]
@@ -285,6 +286,13 @@ def classify_article_for_topic(
     topic: Topic,
 ) -> ClassificationMetadata:
     """Return deterministic classification metadata for one article/topic pair."""
+
+    if topic == "technology" and article.source == GITHUB_TRENDING_SOURCE:
+        return ClassificationMetadata(
+            matched_rules=["technology:source:github-trending"],
+            score=1.0,
+            selection_score=1.0,
+        )
 
     rules = TERM_RULES[topic]
     terms = _article_terms(article)

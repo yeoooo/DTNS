@@ -57,3 +57,8 @@ Recommended emoji vocabulary:
 - `🔗` article links
 - `💡` weekly insight
 - `⚠️` caution or risk
+
+For the `technology` newsletter only, the Editor appends a GitHub weekly
+Trending section when `GitHub Trending (weekly)` articles are present. It
+preserves collector order, renders at most five repositories, and uses the
+collected repository description without AI-generated claims.

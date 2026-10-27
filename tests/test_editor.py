@@ -126,6 +126,35 @@ def _write_articles(path, *, count=1):
     )
 
 
+def test_editor_renders_github_weekly_top_five_deterministically(tmp_path):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    _write_trends(trends_path)
+    _write_articles(articles_path, count=6)
+    payload = json.loads(articles_path.read_text(encoding="utf-8"))
+    for index, article in enumerate(payload["articles"]):
+        article.update(
+            source="GitHub Trending (weekly)",
+            title=f"owner / repository-{index}",
+            canonical_url=f"https://github.com/owner/repository-{index}",
+            summary=f"Repository description {index}.",
+        )
+    articles_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    markdown = write_newsletter(
+        trends_path,
+        tmp_path / "technology_newsletter.md",
+        articles_path=articles_path,
+        client=FakeClient([_response(_draft_response())]),
+    )
+
+    assert "## 🔥 GitHub 주간 Trending Top 5" in markdown
+    assert "Repository description 4." in markdown
+    assert "Repository description 5." not in markdown
+    for index in range(5):
+        assert f"https://github.com/owner/repository-{index}" in markdown
+
+
 def test_editor_writes_deterministic_empty_newsletter_without_client(tmp_path):
     input_path = tmp_path / "technology_trends.json"
     output_path = tmp_path / "technology_newsletter.md"

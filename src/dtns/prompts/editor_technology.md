@@ -24,6 +24,8 @@ Korean editorial draft.
 - Use `technical_perspective` articles to interpret production cases and releases,
   not as another equal-weight summary item.
 - Prefer ecosystem shifts over isolated product announcements.
+- GitHub weekly Trending repositories are rendered separately by runtime code;
+  do not use them as evidence for an editorial trend section.
 
 ## Output
 

@@ -55,6 +55,8 @@ LEVEL_FOUR_HEADING_RE = re.compile(r"^####\s+(.+?)\s*$", re.MULTILINE)
 DISCORD_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
 STATE_DIRECTORY = Path(".state") / "editor"
 MAX_TRENDS = 8
+GITHUB_TRENDING_SOURCE = "GitHub Trending (weekly)"
+GITHUB_TRENDING_LIMIT = 5
 MAX_CHARACTERS = 12000
 MAX_CONTENT_ATTEMPTS = 2
 MAX_OUTPUT_TOKENS = 16384
@@ -1194,6 +1196,25 @@ def render_newsletter(
             *[f"- {item}" for item in draft.insight_items],
         ]
     )
+    github_trending = _github_trending_articles(articles)
+    if github_trending:
+        lines.extend(
+            [
+                "",
+                "## 🔥 GitHub 주간 Trending Top 5",
+                "",
+                "이번 주 GitHub Trending에 오른 오픈소스 저장소와 GitHub가 제공한 소개입니다.",
+            ]
+        )
+        for index, article in enumerate(github_trending, start=1):
+            lines.extend(
+                [
+                    "",
+                    f"### {index}. [{_escape_link_label(article.title)}]"
+                    f"({article.canonical_url})",
+                    _github_trending_description(article),
+                ]
+            )
     return "\n".join(lines)
 
 
@@ -1202,11 +1223,33 @@ def _selected_article_urls(
     articles: list[TopicArticle],
 ) -> set[str]:
     articles_by_id = {article.id: article for article in articles}
-    return {
+    selected = {
         articles_by_id[article_id].canonical_url
         for section in draft.trend_sections
         for article_id in section.article_ids
     }
+    selected.update(
+        article.canonical_url for article in _github_trending_articles(articles)
+    )
+    return selected
+
+
+def _github_trending_articles(articles: list[TopicArticle]) -> list[TopicArticle]:
+    """Return the collected GitHub weekly ranking in source order."""
+
+    return [
+        article
+        for article in articles
+        if article.source == GITHUB_TRENDING_SOURCE
+    ][:GITHUB_TRENDING_LIMIT]
+
+
+def _github_trending_description(article: TopicArticle) -> str:
+    if not article.summary:
+        return "GitHub Trending 페이지에 소개가 제공되지 않았습니다."
+    description = re.sub(r"https?://\S+", "관련 링크", article.summary)
+    description = description.replace("\r", " ").replace("\n", " ")
+    return re.sub(r"([\\`*\[\]])", r"\\\1", description)
 
 
 def _escape_link_label(value: str) -> str:

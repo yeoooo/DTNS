@@ -133,6 +133,19 @@ def test_technical_synthesis_is_high_value_technology_context():
     assert any("agent-evaluation" in rule for rule in result.matched_rules)
 
 
+def test_github_weekly_trending_is_always_selected_for_technology():
+    article = _article(
+        source="GitHub Trending (weekly)",
+        title="owner / repository",
+        article_type=ArticleType.GENERAL_NEWS,
+    )
+
+    result = classify_article_for_topic(article, "technology")
+
+    assert result.selected is True
+    assert result.matched_rules == ["technology:source:github-trending"]
+
+
 def test_meaningful_release_is_selected_but_patch_only_release_is_rejected():
     base = {
         "title": "Spring Boot release",
