@@ -337,6 +337,35 @@ class DraftTrendSection(BaseModel):
         return values
 
 
+class GitHubTrendingDescription(BaseModel):
+    """Korean prose for one renderer-owned GitHub Trending entry."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    article_id: str = Field(
+        min_length=1,
+        max_length=120,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    description: str = Field(
+        min_length=1,
+        max_length=500,
+        description=PLAIN_PROSE_DESCRIPTION,
+    )
+
+    @field_validator("article_id")
+    @classmethod
+    def validate_article_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,119}", value):
+            raise ValueError("article ID has an invalid format")
+        return value
+
+    @field_validator("description")
+    @classmethod
+    def reject_presentation_syntax(cls, value: str) -> str:
+        return _reject_plain_text(value)
+
+
 class EditorDraft(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
@@ -355,6 +384,10 @@ class EditorDraft(BaseModel):
         description=PLAIN_PROSE_DESCRIPTION,
     )
     trend_sections: list[DraftTrendSection] = Field(min_length=1, max_length=8)
+    github_trending_descriptions: list[GitHubTrendingDescription] = Field(
+        default_factory=list,
+        max_length=GITHUB_TRENDING_LIMIT,
+    )
     insight_items: list[str] = Field(
         min_length=1,
         max_length=5,
@@ -946,10 +979,20 @@ def _validate_korean_draft(draft: EditorDraft) -> None:
         prose.extend(
             [section.heading, section.overview, section.why_it_matters]
         )
+    prose.extend(
+        description.description for description in draft.github_trending_descriptions
+    )
     try:
         _require_korean_text("\n".join(prose))
     except ValueError:
         raise EditorContentError("body_not_korean") from None
+    for description in draft.github_trending_descriptions:
+        try:
+            _require_korean_text(description.description)
+        except ValueError:
+            raise EditorContentError(
+                f"github_trending_description_not_korean:{description.article_id}"
+            ) from None
 
 
 def _require_korean_text(text: str) -> None:
@@ -1127,6 +1170,19 @@ def _validate_draft_references(
                     f"misplaced_article_id:{section.trend_id}:{article_id}"
                 )
 
+    expected_github_ids = [
+        article.id
+        for article in _github_trending_articles(articles)
+        if article.summary is not None
+    ]
+    actual_github_ids = [
+        item.article_id for item in draft.github_trending_descriptions
+    ]
+    if len(actual_github_ids) != len(set(actual_github_ids)):
+        raise EditorContentError("duplicate_github_trending_article_ids")
+    if set(actual_github_ids) != set(expected_github_ids):
+        raise EditorContentError("github_trending_article_ids_mismatch")
+
 
 def _draft_validation_feedback(error: Exception) -> str:
     """Return corrective feedback without prose, URLs, or raw model output."""
@@ -1197,6 +1253,10 @@ def render_newsletter(
         ]
     )
     github_trending = _github_trending_articles(articles)
+    github_descriptions = {
+        item.article_id: item.description
+        for item in draft.github_trending_descriptions
+    }
     if github_trending:
         lines.extend(
             [
@@ -1212,7 +1272,7 @@ def render_newsletter(
                     "",
                     f"### {index}. [{_escape_link_label(article.title)}]"
                     f"({article.canonical_url})",
-                    _github_trending_description(article),
+                    _github_trending_description(article, github_descriptions),
                 ]
             )
     return "\n".join(lines)
@@ -1244,12 +1304,13 @@ def _github_trending_articles(articles: list[TopicArticle]) -> list[TopicArticle
     ][:GITHUB_TRENDING_LIMIT]
 
 
-def _github_trending_description(article: TopicArticle) -> str:
+def _github_trending_description(
+    article: TopicArticle,
+    descriptions: dict[str, str],
+) -> str:
     if not article.summary:
         return "GitHub Trending 페이지에 소개가 제공되지 않았습니다."
-    description = re.sub(r"https?://\S+", "관련 링크", article.summary)
-    description = description.replace("\r", " ").replace("\n", " ")
-    return re.sub(r"([\\`*\[\]])", r"\\\1", description)
+    return descriptions[article.id]
 
 
 def _escape_link_label(value: str) -> str:
@@ -1316,6 +1377,14 @@ def _build_input_payload(
             }
             for trend in trends_file.trends
         ],
+        "github_trending": [
+            {
+                "article_id": article.id,
+                "summary": article.summary,
+            }
+            for article in _github_trending_articles(topic_articles)
+            if article.summary is not None
+        ],
         "requirements": [
             "Write natural Korean.",
             "Keep technical names in English.",
@@ -1329,6 +1398,10 @@ def _build_input_payload(
             "Do not emit URLs, links, article titles, or unknown IDs.",
             "Use trimmed single-line plain text without Markdown, HTML, or emoji.",
             "Select article IDs only from the corresponding trend.",
+            "Translate every github_trending summary naturally into Korean and "
+            "return it only as github_trending_descriptions with its article_id.",
+            "Do not output repository names, ranks, URLs, stars, languages, or "
+            "other GitHub metadata; the renderer preserves them exactly.",
         ],
     }
     return payload

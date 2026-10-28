@@ -61,4 +61,6 @@ Recommended emoji vocabulary:
 For the `technology` newsletter only, the Editor appends a GitHub weekly
 Trending section when `GitHub Trending (weekly)` articles are present. It
 preserves collector order, renders at most five repositories, and uses the
-collected repository description without AI-generated claims.
+Editor-generated Korean translation of each collected repository description.
+Repository names, URLs, ranks, stars, languages, and numeric metadata remain
+renderer-owned and must not be translated or changed by the model.

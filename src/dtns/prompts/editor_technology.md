@@ -25,7 +25,9 @@ Korean editorial draft.
   not as another equal-weight summary item.
 - Prefer ecosystem shifts over isolated product announcements.
 - GitHub weekly Trending repositories are rendered separately by runtime code;
-  do not use them as evidence for an editorial trend section.
+  do not use them as evidence for an editorial trend section. Translate each
+  supplied GitHub summary into natural Korean using its article ID only. Do not
+  emit repository names, ranks, URLs, stars, languages, or numeric metadata.
 
 ## Output
 

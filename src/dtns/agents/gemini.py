@@ -20,7 +20,7 @@ DEFAULT_FALLBACK_MODEL = "gemini-3.1-flash-lite"
 FALLBACK_MODEL_ENV_VAR = "GEMINI_FALLBACK_MODEL"
 
 RETRYABLE_STATUS_CODES = {429, *range(500, 600)}
-MAX_ATTEMPTS_PER_MODEL = 2
+MAX_ATTEMPTS_PER_MODEL = 3
 
 # Gemini free tier protection:
 # 15 RPM => 1 request / 4s.

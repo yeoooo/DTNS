@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+from dtns.agents import gemini
 from dtns.agents.editor import runner
 from dtns.agents.editor.runner import (
     normalize_markdown,
@@ -52,7 +53,12 @@ def _response(text, finish_reason="STOP"):
     )
 
 
-def _draft_response(*, article_id="article-0", trend_id="trend-0"):
+def _draft_response(
+    *,
+    article_id="article-0",
+    trend_id="trend-0",
+    github_trending_descriptions=None,
+):
     return json.dumps(
         {
             "title": "이번 주 Technology 뉴스레터",
@@ -66,6 +72,7 @@ def _draft_response(*, article_id="article-0", trend_id="trend-0"):
                     "article_ids": [article_id],
                 }
             ],
+            "github_trending_descriptions": github_trending_descriptions or [],
             "insight_items": ["관련 기술의 변화를 계속 확인해야 합니다."],
         },
         ensure_ascii=False,
@@ -141,18 +148,93 @@ def test_editor_renders_github_weekly_top_five_deterministically(tmp_path):
         )
     articles_path.write_text(json.dumps(payload), encoding="utf-8")
 
+    client = FakeClient(
+        [
+            _response(
+                _draft_response(
+                    github_trending_descriptions=[
+                        {
+                            "article_id": f"article-{index}",
+                            "description": f"저장소 기능을 설명하는 한국어 소개 {index}입니다.",
+                        }
+                        for index in range(5)
+                    ],
+                )
+            )
+        ]
+    )
     markdown = write_newsletter(
         trends_path,
         tmp_path / "technology_newsletter.md",
         articles_path=articles_path,
-        client=FakeClient([_response(_draft_response())]),
+        client=client,
     )
 
     assert "## 🔥 GitHub 주간 Trending Top 5" in markdown
-    assert "Repository description 4." in markdown
+    assert "저장소 기능을 설명하는 한국어 소개 4입니다." in markdown
+    assert "Repository description 4." not in markdown
     assert "Repository description 5." not in markdown
     for index in range(5):
+        assert f"### {index + 1}. [owner / repository-{index}]" in markdown
         assert f"https://github.com/owner/repository-{index}" in markdown
+    request_payload = json.loads(client.models.calls[0]["contents"][1])
+    assert request_payload["github_trending"] == [
+        {
+            "article_id": f"article-{index}",
+            "summary": f"Repository description {index}.",
+        }
+        for index in range(5)
+    ]
+
+
+def test_editor_retries_english_github_trending_translation(tmp_path, monkeypatch):
+    trends_path = tmp_path / "technology_trends.json"
+    articles_path = tmp_path / "technology_articles.json"
+    _write_trends(trends_path)
+    _write_articles(articles_path)
+    payload = json.loads(articles_path.read_text(encoding="utf-8"))
+    payload["articles"][0].update(
+        source="GitHub Trending (weekly)",
+        title="owner / repository",
+        canonical_url="https://github.com/owner/repository",
+        summary="A useful command line tool.",
+    )
+    articles_path.write_text(json.dumps(payload), encoding="utf-8")
+    client = FakeClient(
+        [
+            _response(
+                _draft_response(
+                    github_trending_descriptions=[
+                        {
+                            "article_id": "article-0",
+                            "description": "A useful command line tool.",
+                        }
+                    ]
+                )
+            ),
+            _response(
+                _draft_response(
+                    github_trending_descriptions=[
+                        {
+                            "article_id": "article-0",
+                            "description": "유용한 명령줄 도구를 제공하는 저장소입니다.",
+                        }
+                    ]
+                )
+            ),
+        ]
+    )
+    monkeypatch.setattr(gemini.time, "sleep", lambda _: None)
+
+    markdown = write_newsletter(
+        trends_path,
+        tmp_path / "technology_newsletter.md",
+        articles_path=articles_path,
+        client=client,
+    )
+
+    assert len(client.models.calls) == 2
+    assert "유용한 명령줄 도구를 제공하는 저장소입니다." in markdown
 
 
 def test_editor_writes_deterministic_empty_newsletter_without_client(tmp_path):

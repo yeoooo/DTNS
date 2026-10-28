@@ -68,6 +68,7 @@ The model returns JSON only. It may produce:
 - Korean overview and why-it-matters prose
 - article IDs belonging to that trend
 - Korean weekly insight items
+- Korean descriptions for renderer-owned GitHub Trending entries
 
 The model must not produce:
 
@@ -77,9 +78,17 @@ The model must not produce:
 - emoji, section markers, list markers, or heading markers
 - unknown trend IDs or article IDs
 - deterministic fields such as timestamps, fingerprints, or model names
+- repository names, ranks, URLs, stars, languages, or numeric metadata for
+  GitHub Trending entries
 
 Runtime code supplies the envelope fields `schema_version`, `topic`, and
 `generated_at` after validating the model response.
+
+For the `technology` newsletter, the model may return
+`github_trending_descriptions`: one `{article_id, description}` pair for each
+GitHub Trending entry that has a collected summary. The description is Korean
+plain prose only. The renderer, not the model, preserves and renders the rank,
+repository name, canonical URL, stars, language, and other numeric metadata.
 
 ### Plain-text Invariant
 

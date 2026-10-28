@@ -43,9 +43,47 @@ def test_generate_content_falls_back_after_primary_503(monkeypatch):
         client=client,
     )
 
-    assert models.calls == ["primary-model", "primary-model", "fallback-model"]
+    assert models.calls == [
+        "primary-model",
+        "primary-model",
+        "primary-model",
+        "fallback-model",
+    ]
     assert result.model == "fallback-model"
     assert result.response.text == "OK"
+
+
+def test_generate_content_recovers_after_two_transient_errors(monkeypatch):
+    class IntermittentModels:
+        def __init__(self):
+            self.calls: list[str] = []
+
+        def generate_content(self, *, model, contents, config):
+            self.calls.append(model)
+            if len(self.calls) <= 2:
+                raise ServerError(
+                    503,
+                    {"error": {"code": 503, "status": "UNAVAILABLE"}},
+                )
+            return SimpleNamespace(text="OK")
+
+    models = IntermittentModels()
+    monkeypatch.setattr(gemini.time, "sleep", lambda _: None)
+
+    result = gemini.generate_content_with_fallback(
+        primary_model="gemini-3.1-flash-lite",
+        fallback_model="gemini-3.1-flash-lite",
+        contents="test",
+        config={},
+        client=SimpleNamespace(models=models),
+    )
+
+    assert models.calls == [
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite",
+        "gemini-3.1-flash-lite",
+    ]
+    assert result.model == "gemini-3.1-flash-lite"
 
 
 def test_fallback_does_not_open_circuit_until_output_is_accepted(
