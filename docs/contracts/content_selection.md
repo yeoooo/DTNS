@@ -67,7 +67,7 @@ for multiple topics.
 GitHub weekly Trending repositories are an explicit Technology exception: all
 items from `GitHub Trending (weekly)` are selected for `technology` regardless
 of AI tags or editorial-score thresholds. This keeps the weekly ranking
-available for the deterministic Top 5 newsletter section.
+available for the deterministic Top 10 newsletter section.
 
 ## Trend evidence roles
 

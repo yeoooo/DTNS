@@ -56,7 +56,7 @@ DISCORD_DIVIDER = "━━━━━━━━━━━━━━━━━━━━"
 STATE_DIRECTORY = Path(".state") / "editor"
 MAX_TRENDS = 8
 GITHUB_TRENDING_SOURCE = "GitHub Trending (weekly)"
-GITHUB_TRENDING_LIMIT = 5
+GITHUB_TRENDING_LIMIT = 10
 MAX_CHARACTERS = 12000
 MAX_CONTENT_ATTEMPTS = 2
 MAX_OUTPUT_TOKENS = 16384
@@ -1261,7 +1261,7 @@ def render_newsletter(
         lines.extend(
             [
                 "",
-                "## 🔥 GitHub 주간 Trending Top 5",
+                "## 🔥 GitHub 주간 Trending Top 10",
                 "",
                 "이번 주 GitHub Trending에 오른 오픈소스 저장소와 GitHub가 제공한 소개입니다.",
             ]

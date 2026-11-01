@@ -133,11 +133,11 @@ def _write_articles(path, *, count=1):
     )
 
 
-def test_editor_renders_github_weekly_top_five_deterministically(tmp_path):
+def test_editor_renders_github_weekly_top_ten_deterministically(tmp_path):
     trends_path = tmp_path / "technology_trends.json"
     articles_path = tmp_path / "technology_articles.json"
     _write_trends(trends_path)
-    _write_articles(articles_path, count=6)
+    _write_articles(articles_path, count=11)
     payload = json.loads(articles_path.read_text(encoding="utf-8"))
     for index, article in enumerate(payload["articles"]):
         article.update(
@@ -157,7 +157,7 @@ def test_editor_renders_github_weekly_top_five_deterministically(tmp_path):
                             "article_id": f"article-{index}",
                             "description": f"저장소 기능을 설명하는 한국어 소개 {index}입니다.",
                         }
-                        for index in range(5)
+                        for index in range(10)
                     ],
                 )
             )
@@ -170,11 +170,11 @@ def test_editor_renders_github_weekly_top_five_deterministically(tmp_path):
         client=client,
     )
 
-    assert "## 🔥 GitHub 주간 Trending Top 5" in markdown
-    assert "저장소 기능을 설명하는 한국어 소개 4입니다." in markdown
-    assert "Repository description 4." not in markdown
-    assert "Repository description 5." not in markdown
-    for index in range(5):
+    assert "## 🔥 GitHub 주간 Trending Top 10" in markdown
+    assert "저장소 기능을 설명하는 한국어 소개 9입니다." in markdown
+    assert "Repository description 9." not in markdown
+    assert "Repository description 10." not in markdown
+    for index in range(10):
         assert f"### {index + 1}. [owner / repository-{index}]" in markdown
         assert f"https://github.com/owner/repository-{index}" in markdown
     request_payload = json.loads(client.models.calls[0]["contents"][1])
@@ -183,7 +183,7 @@ def test_editor_renders_github_weekly_top_five_deterministically(tmp_path):
             "article_id": f"article-{index}",
             "summary": f"Repository description {index}.",
         }
-        for index in range(5)
+        for index in range(10)
     ]
 
 

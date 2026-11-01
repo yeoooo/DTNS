@@ -35,7 +35,7 @@
     "github_trending_descriptions": {
       "type": "array",
       "items": { "$ref": "#/$defs/githubTrendingDescription" },
-      "maxItems": 5
+      "maxItems": 10
     },
     "insight_items": {
       "type": "array",
