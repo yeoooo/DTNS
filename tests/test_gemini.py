@@ -10,6 +10,13 @@ from jsonschema import Draft202012Validator, FormatChecker
 from dtns.agents import gemini
 
 
+def test_default_fallback_avoids_the_lite_primary_from_the_failed_run(monkeypatch):
+    monkeypatch.delenv("GEMINI_FALLBACK_MODEL", raising=False)
+
+    assert gemini.resolve_fallback_model() == "gemini-3.5-flash-lite"
+    assert gemini.resolve_fallback_model() != "gemini-3.1-flash-lite"
+
+
 class FakeModels:
     def __init__(self):
         self.calls: list[str] = []

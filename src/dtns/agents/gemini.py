@@ -16,7 +16,7 @@ from typing import Any
 from dtns.agents.execution_state import AIExecutionState, AIExecutionStateStore
 
 
-DEFAULT_FALLBACK_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite"
 FALLBACK_MODEL_ENV_VAR = "GEMINI_FALLBACK_MODEL"
 
 RETRYABLE_STATUS_CODES = {429, *range(500, 600)}
